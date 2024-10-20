@@ -12,15 +12,15 @@ use reth_node_ethereum::EthereumNode;
 use revm::primitives::KECCAK_EMPTY;
 use revm::state::{AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
-use alloy::primitives::BlockNumber;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-
 use eyre::Result;
 
+
+// Main structure for the Node Database
 pub struct NodeDB {
     db_provider: RwLock<StateProviderBox>,
     provider_factory: ProviderFactory::<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>,
@@ -29,9 +29,9 @@ pub struct NodeDB {
 }
 
 impl NodeDB {
-    // Construct a new Node database
+    // Constructor for NodeDB
     pub fn new(db_path: String) -> Result<Self> {
-        // establish database connection
+        // Open the database in read-only mode
         let db_path = Path::new(&db_path);
         let db = Arc::new(open_db_read_only(
             db_path.join("db").as_path(),
@@ -39,7 +39,6 @@ impl NodeDB {
         )?);
 
         let spec = Arc::new(ChainSpecBuilder::mainnet().build());
-
         let factory =
             ProviderFactory::<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>::new(
                 db.clone(),
@@ -47,7 +46,7 @@ impl NodeDB {
                 StaticFileProvider::read_only(db_path.join("static_files"), true)?,
             );
 
-        // construct DB with latest DB provider
+        // Get latest block number and provider
         let db_block = factory.last_block_number()?;
         let db_provider = factory.latest()?;
 
@@ -59,12 +58,7 @@ impl NodeDB {
         })
     }
 
-    fn fetch_account(&self, addr: Address) -> AccountInfo {
-        self.basic_ref(addr).unwrap().unwrap()
-    }
-
-    // Insert account info into the database. This is an insertion operation so we assume this account
-    // does not already exist
+    // Insert account information into the database
     pub fn insert_account_info(&mut self, account_address: Address, account_info: AccountInfo) {
         let mut new_account = NodeDBAccount::new_not_existing();
         new_account.info = account_info;
@@ -90,12 +84,11 @@ impl NodeDB {
         return Ok(())
     }
 
-    // Update the db_provider to access state from the latest block
-    // Everything is forwarded to *_ref calls so we need interior mutability to reassign
+    // Update the provider to access state from the latest block
     fn update_provider(&self) -> Result<()> {
         let current_block = self.provider_factory.last_block_number()?;
-        self.db_block.fetch_max(current_block, Ordering::SeqCst);
         if current_block > self.db_block.load(Ordering::Relaxed) {
+            self.db_block.store(current_block, Ordering::Relaxed);
             *self.db_provider.write().unwrap() = self.provider_factory.latest()?;
         }
         Ok(())
@@ -103,7 +96,7 @@ impl NodeDB {
 
 }
 
-
+// Implement the Database trait for NodeDB
 impl Database for NodeDB {
     type Error = eyre::Error;
 
@@ -124,6 +117,7 @@ impl Database for NodeDB {
     }
 }
 
+// Implement the DatabaseRef trait for NodeDB
 impl DatabaseRef for NodeDB {
     type Error = eyre::Error;
 
@@ -151,6 +145,7 @@ impl DatabaseRef for NodeDB {
     }
 
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
+        self.update_provider()?;
         let blockhash = self.db_provider.read().unwrap().block_hash(number)?;
 
         if let Some(hash) = blockhash {
@@ -161,7 +156,7 @@ impl DatabaseRef for NodeDB {
     }
 }
 
-
+// Structure to represent an account in the NodeDB
 #[derive(Default)]
 pub struct NodeDBAccount {
     pub info: AccountInfo,
@@ -181,17 +176,15 @@ impl NodeDBAccount {
 
 
 #[cfg(test)]
-mod NodeDBTests {
+mod nodedb_tests {
     use super::*;
     use alloy::primitives::address;
     use alloy::providers::{ProviderBuilder, WsConnect, Provider};
     use futures::StreamExt;
-    use revm::Evm;
+    use dotenv;
 
-
-    /* 
     #[test]
-    fn test_swap() {
+    fn test_fetch_account() {
         let database_path = String::from("/home/dsfreakdude/nodes/base/data");
         let nodedb = NodeDB::new(database_path).unwrap();
 
@@ -199,39 +192,32 @@ mod NodeDBTests {
         let account = nodedb.basic_ref(weth);
         println!("{:#?}", account);
     }
-    */
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_in_sync_with_chain() {
+        dotenv::dotenv().ok();
         let weth = address!("88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C");
-        let database_path = String::from("/home/dsfreakdude/nodes/base/data");
+
+        // Setup databse connection
+        let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
         let mut nodedb = NodeDB::new(database_path).unwrap();
 
-        // setup third party connection
-        let rpc = ProviderBuilder::new().on_http(
-            "https://1rpc.io/base".parse().unwrap()
-        );
+        // Setup third party connection for Comparison
+        let rpc_url = "http://172.18.0.14:8547";
+        let rpc = ProviderBuilder::new().on_http(rpc_url.parse().unwrap());
 
-        // setup a stream
+        // Start a stream of blocks
         let ws_url = WsConnect::new("ws://172.18.0.14:8548");
         let ws = Arc::new(ProviderBuilder::new().on_ws(ws_url).await.unwrap());
         let sub = ws.subscribe_blocks().await.unwrap();
         let mut stream = sub.into_stream();
-
-        // stream in new blocks
-        println!("Waiting for anewblock");
-        while let Some(block) = stream.next().await {
-            println!("got new block");
+        while let Some(_) = stream.next().await {
+            // fetch reserves from db and rpc
             let db_reserve = nodedb.storage(weth, U256::from(8)).unwrap();
             let rpc_reserve = rpc.get_storage_at(weth, U256::from(8)).await.unwrap();
-            println!("DB reserves {:?}, RPC reserves {:?}", db_reserve, rpc_reserve);
-            println!("Equal {}", db_reserve == rpc_reserve)
+            println!("DB Reserve {}, RPC Reserve {}", db_reserve, rpc_reserve);
+            assert_eq!(db_reserve, rpc_reserve)
 
         }
-
-
-
-
     }
-
 }

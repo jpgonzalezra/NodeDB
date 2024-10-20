@@ -16,4 +16,5 @@ revm-database = { git = "https://github.com/bluealloy/revm", package = "revm-dat
 alloy = { version = "0.5.2", features = ["providers"] }
 tokio = "1.40.0"
 futures = "0.3.31"
+dotenv = "0.15.0"
 
