@@ -1,0 +1,19 @@
+[package]
+name = "node-db"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.90"
+eyre = "0.6.12"
+reth = {git = "https://github.com/paradigmxyz/reth"}
+reth-db = {git = "https://github.com/paradigmxyz/reth", package = "reth-db"}
+reth-chainspec = {git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec"}
+reth-node-ethereum = {git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum"}
+
+revm = {git = "https://github.com/bluealloy/revm" }
+revm-database = { git = "https://github.com/bluealloy/revm", package = "revm-database", features = ["alloydb"] }
+alloy = { version = "0.5.2", features = ["providers"] }
+tokio = "1.40.0"
+futures = "0.3.31"
+
