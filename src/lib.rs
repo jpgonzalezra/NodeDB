@@ -10,7 +10,7 @@ use reth_chainspec::ChainSpecBuilder;
 use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
 use reth_node_ethereum::EthereumNode;
 use revm::primitives::KECCAK_EMPTY;
-use revm::state::{AccountInfo, Bytecode};
+use revm::state::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
 use std::path::Path;
 use std::sync::Arc;
@@ -25,7 +25,8 @@ pub struct NodeDB {
     db_provider: RwLock<StateProviderBox>,
     provider_factory: ProviderFactory::<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>,
     accounts: HashMap<Address, NodeDBAccount>,
-    db_block: AtomicU64 
+    db_block: AtomicU64,
+    contracts: HashMap<B256, Bytecode>
 }
 
 impl NodeDB {
@@ -54,7 +55,8 @@ impl NodeDB {
             db_provider: RwLock::new(db_provider),
             provider_factory: factory,
             accounts: HashMap::new(),
-            db_block: AtomicU64::new(db_block)
+            db_block: AtomicU64::new(db_block),
+            contracts: HashMap::new()
         })
     }
 
@@ -126,6 +128,7 @@ impl DatabaseRef for NodeDB {
         let account = self.db_provider.read().unwrap().basic_account(address)?.unwrap();
         let code = self.db_provider.read().unwrap().account_code(address)?.unwrap();
 
+
         Ok(Some(AccountInfo::new(
             account.balance,
             account.nonce,
@@ -152,6 +155,54 @@ impl DatabaseRef for NodeDB {
             Ok(B256::new(hash.0))
         } else {
             Ok(KECCAK_EMPTY)
+        }
+    }
+}
+
+impl DatabaseCommit for NodeDB {
+    fn commit(&mut self, changes: HashMap<Address, Account>) {
+        for (address, mut account) in changes {
+            if !account.is_touched() {
+                continue;
+            }
+            if account.is_selfdestructed() {
+                let db_account = self.accounts.entry(address).or_default();
+                db_account.storage.clear();
+                db_account.state = AccountState::NotExisting;
+                db_account.info = AccountInfo::default();
+                continue;
+            }
+            let is_newly_created = account.is_created();
+
+            if let Some(code) = &mut account.info.code {
+                if !code.is_empty() {
+                    if account.info.code_hash == KECCAK_EMPTY {
+                        account.info.code_hash = code.hash_slow();
+                    }
+                    self.contracts
+                        .entry(account.info.code_hash)
+                        .or_insert_with(|| code.clone());
+                }
+            }
+
+            let db_account = self.accounts.entry(address).or_default();
+            db_account.info = account.info;
+
+            db_account.state = if is_newly_created {
+                db_account.storage.clear();
+                AccountState::StorageCleared
+            } else if db_account.state.is_storage_cleared() {
+                // Preserve old account state if it already exists
+                AccountState::StorageCleared
+            } else {
+                AccountState::Touched
+            };
+            db_account.storage.extend(
+                account
+                    .storage
+                    .into_iter()
+                    .map(|(key, value)| (key, value.present_value())),
+            );
         }
     }
 }
@@ -217,7 +268,6 @@ mod nodedb_tests {
             let rpc_reserve = rpc.get_storage_at(weth, U256::from(8)).await.unwrap();
             println!("DB Reserve {}, RPC Reserve {}", db_reserve, rpc_reserve);
             assert_eq!(db_reserve, rpc_reserve)
-
         }
     }
 }
