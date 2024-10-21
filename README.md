@@ -1,7 +1,7 @@
 # NodeDB
-NodeDB is a revm DB implementation that hooks directly into the reth database and operates on the latest canonical state. The advantages of this are very obvious. Fetching from the db is **very** fast and should be used instead of RPC/IPC when its convenient. 
+NodeDB is a revm DB implementation that hooks directly into the reth database and operates on the latest canonical state. The advantages of this are very obvious. Fetching from the db is **very** fast and should be used instead of RPC/IPC when possible. 
 
-Current baked in revm DB implementations cache state without fetching from provider (CacheDB), fetch state from provider but dont dont allow you to insert accounts/storage (AlloyDB), or fetch state and cache it which results in old state (CacheDB<AlloyDB>). 
+Current baked in revm DB implementations cache state without fetching from provider (CacheDB), fetch state from provider but dont dont allow you to insert accounts/storage (AlloyDB), or fetch state and cache it which results in old state (CacheDB(AlloyDB)). 
 
 # Usage
 ```rust
