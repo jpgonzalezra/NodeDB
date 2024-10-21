@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use eyre::Result;
+use eyre::{Result, eyre};
+
 
 
 // Main structure for the Node Database
@@ -61,14 +62,14 @@ impl NodeDB {
     }
 
     // Insert account information into the database
-    pub fn insert_account_info(&mut self, account_address: Address, account_info: AccountInfo) {
-        let mut new_account = NodeDBAccount::new_not_existing();
+    pub fn insert_account_info(&mut self, account_address: Address, account_info: AccountInfo, insertion_type: InsertionType)  {
+        let mut new_account = NodeDBAccount::new(insertion_type);
         new_account.info = account_info;
         self.accounts.insert(account_address, new_account);
     }
 
     // Insert storage info into the database.
-    pub fn insert_account_storage(&mut self, account_address: Address, slot: U256, value: U256) -> Result<()> {
+    pub fn insert_account_storage(&mut self, account_address: Address, slot: U256, value: U256, insertion_type: InsertionType) -> Result<()> {
         // check to see if we have already created an account for this address
         if let Some(account) = self.accounts.get_mut(&account_address) {
             // there is already an account, just update the storage
@@ -78,7 +79,7 @@ impl NodeDB {
 
         // the account does not exist, fetch it from the provider and the insert into the database
         let account = self.basic_ref(account_address)?.unwrap();
-        self.insert_account_info(account_address, account);
+        self.insert_account_info(account_address, account, insertion_type);
 
         // account is now inserted into database, fetch and insert storage
         let node_db_account = self.accounts.get_mut(&account_address).unwrap();
@@ -103,7 +104,24 @@ impl Database for NodeDB {
     type Error = eyre::Error;
 
     fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        Self::basic_ref(self, address)
+        // if the account exists and it is custom, we know there is no corresponding chain state so
+        if let Some(account) = self.accounts.get(&address) {
+            if account.insertion_type == InsertionType::Custom {
+                return Ok(Some(account.info.clone()));
+            }
+        }
+
+        // fetch the account from the chain
+        let account_info = Self::basic_ref(self, address)?.unwrap();
+        match self.accounts.get_mut(&address) {
+            Some(account) => account.info = account_info.clone(),
+            None => {
+                self.insert_account_info(address, account_info.clone(), InsertionType::Fetched);
+            }
+        }
+
+        // this account does not exist and it is a fetched account
+        Ok(Some(account_info))
     }
 
     fn code_by_hash(&mut self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
@@ -111,7 +129,32 @@ impl Database for NodeDB {
     }
 
     fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        Self::storage_ref(self, address, index)
+        // custom cache check
+        if let Some(account) = self.accounts.get(&address) {
+            if account.insertion_type == InsertionType::Custom {
+                if let Some(value) = account.storage.get(&index) {
+                    return Ok(*value);
+                } else {
+                    // this is a custom account, there is no onchain storage so this slot is invalud
+                    return Err(eyre!("Custom account {} does not have storage slot {} populated", address, index));
+                }
+            }
+        }
+
+        let value = Self::storage_ref(self, address, index)?;
+        match self.accounts.get_mut(&address) {
+            Some(account) => {
+                // the account exists, just insert the storage value
+                account.storage.insert(index, value);
+            }
+            None => {
+                // the account does not exist. insert account via basic and the insert storage value
+                let _ = Self::basic(self, address)?;
+                let account = self.accounts.get_mut(&address).unwrap();
+                account.storage.insert(index, value);
+            }
+        }
+        Ok(value)
     }
 
     fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
@@ -207,22 +250,34 @@ impl DatabaseCommit for NodeDB {
     }
 }
 
+
+// Enum representing if an account was fetched from the chain or 
+// custom data that was inserted into the database
+#[derive(Default, Eq, PartialEq, Copy, Clone)]
+pub enum InsertionType {
+    Custom,
+    #[default]
+    Fetched
+}
+
 // Structure to represent an account in the NodeDB
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct NodeDBAccount {
     pub info: AccountInfo,
     pub state: AccountState,
-    pub storage: HashMap<U256, U256>
+    pub storage: HashMap<U256, U256>,
+    pub insertion_type: InsertionType,
 }
 
 impl NodeDBAccount {
-    pub fn new_not_existing() -> Self {
+    pub fn new(insertion_type: InsertionType) -> Self {
         Self {
+            info: AccountInfo::default(),
             state: AccountState::NotExisting,
-            ..Default::default()
+            storage: HashMap::new(),
+            insertion_type
         }
     }
-
 }
 
 
