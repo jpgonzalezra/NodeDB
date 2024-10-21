@@ -300,7 +300,7 @@ impl DatabaseCommit for NodeDB {
                 account
                     .storage
                     .into_iter()
-                    .map(|(key, value)| (key, NodeDBSlot {value: value.present_value(), insertion_type: InsertionType::OnChain} )),
+                    .map(|(key, value)| (key, NodeDBSlot {value: value.present_value(), insertion_type: InsertionType::Custom} )),
             );
         }
     }

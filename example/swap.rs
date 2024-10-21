@@ -72,15 +72,14 @@ async fn main() -> Result<()> {
     .abi_encode();
     evm.tx_mut().transact_to = TransactTo::Call(weth);
     evm.tx_mut().data = approve_calldata.into();
-    let res = evm.transact_commit().unwrap();
-    println!("{:?}", res);
+    evm.transact_commit().unwrap();
 
     // we now have some of the input token and we have approved the router to spend it
     // try a swap to see if if it is valid
 
     // setup calldata based on the swap type
     let calldata = V2Swap::swapExactTokensForTokensCall {
-        amountIn: U256::from(1e16),
+        amountIn: U256::from(1e18),
         amountOutMin: U256::ZERO,
         path: vec![weth, usdc],
         to: account,
@@ -95,11 +94,12 @@ async fn main() -> Result<()> {
     // if we can transact, add it as it is a valid pool. Else ignore it
     let ref_tx = evm.transact().unwrap();
     let result = ref_tx.result;
-    println!("{:#?}", result);
-    if let ExecutionResult::Success { .. } = result {
-        println!("success");
-    } else {
-        println!("not success");
-    }
+    let output = result.output().unwrap();
+    let decoded_outputs = <Vec<U256>>::abi_decode(output, false).unwrap();
+    println!(
+        "Swapped 1 WETH for {} USDC",
+        decoded_outputs.get(1).unwrap()
+    );
+
     Ok(())
 }

@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let output = result.output().unwrap();
     let decoded_outputs = <Vec<U256>>::abi_decode(output, false).unwrap();
     println!(
-        "Swapped 1 WETH for {} USDC",
+        "1 WETH equals {} USDC",
         decoded_outputs.get(1).unwrap()
     );
 
