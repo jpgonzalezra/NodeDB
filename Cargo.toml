@@ -12,8 +12,8 @@ name = "quote"
 path = "example/quote.rs"
 
 [[bin]]
-name = "custom-balance"
-path = "example/custom_balance.rs"
+name = "custom-slot"
+path = "example/custom_slot.rs"
 
 [[bin]] 
 name = "approval"

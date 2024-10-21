@@ -19,14 +19,15 @@ sol!(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    dotenv::dotenv().ok();
+
     // on chain addresses
     let account = address!("0000000000000000000000000000000000000001");
     let uniswap_router = address!("7a250d5630B4cF539739dF2C5dAcb4c659F2488D");
     let weth = address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
 
     // construct the database
-    let database_path = String::from("/mnt/eth-docker-data");
+    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
 
     // give our account some weth

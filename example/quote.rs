@@ -18,6 +18,8 @@ sol!(
 #[tokio::main]
 
 async fn main() -> Result<()> {
+    dotenv::dotenv().ok();
+
     // on-chain addresses
     let vitalik = address!("d8dA6BF26964aF9D7eEd9e03E53415D37aA96045");
     let weth = address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
@@ -25,7 +27,7 @@ async fn main() -> Result<()> {
     let uniswap = address!("7a250d5630B4cF539739dF2C5dAcb4c659F2488D");
 
     // setup the db
-    let database_path = String::from("/mnt/eth-docker-data");
+    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
 
     // construct the calldata for weth->usdc quote
@@ -54,10 +56,7 @@ async fn main() -> Result<()> {
     let result = ref_tx.result;
     let output = result.output().unwrap();
     let decoded_outputs = <Vec<U256>>::abi_decode(output, false).unwrap();
-    println!(
-        "1 WETH equals {} USDC",
-        decoded_outputs.get(1).unwrap()
-    );
+    println!("1 WETH equals {} USDC", decoded_outputs.get(1).unwrap());
 
     Ok(())
 }

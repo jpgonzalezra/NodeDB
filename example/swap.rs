@@ -5,7 +5,6 @@ use eyre::Result;
 use node_db::{InsertionType, NodeDB};
 use revm::primitives::keccak256;
 use revm::wiring::default::TransactTo;
-use revm::wiring::result::ExecutionResult;
 use revm::wiring::EthereumWiring;
 use revm::Evm;
 
@@ -31,7 +30,8 @@ sol!(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    dotenv::dotenv().ok();
+
     // on chain addresses
     let account = address!("0000000000000000000000000000000000000001");
     let uniswap_router = address!("7a250d5630B4cF539739dF2C5dAcb4c659F2488D");
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let usdc = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
 
     // construct the database
-    let database_path = String::from("/mnt/eth-docker-data");
+    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
 
     // give our account some weth

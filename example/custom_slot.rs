@@ -59,4 +59,3 @@ async fn main() -> Result<()> {
     println!("Account has custom balance {:?}", balance);
     Ok(())
 }
-
