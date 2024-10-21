@@ -3,6 +3,22 @@ name = "node-db"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "swap"
+path = "example/swap.rs"
+
+[[bin]]
+name = "quote"
+path = "example/quote.rs"
+
+[[bin]]
+name = "custom-balance"
+path = "example/custom_balance.rs"
+
+[[bin]] 
+name = "approval"
+path = "example/approval.rs"
+
 [dependencies]
 anyhow = "1.0.90"
 eyre = "0.6.12"
@@ -13,8 +29,10 @@ reth-node-ethereum = {git = "https://github.com/paradigmxyz/reth", package = "re
 
 revm = {git = "https://github.com/bluealloy/revm" }
 revm-database = { git = "https://github.com/bluealloy/revm", package = "revm-database", features = ["alloydb"] }
-alloy = { version = "0.5.2", features = ["providers"] }
-tokio = "1.40.0"
+alloy = { version = "0.5.2", features = ["contract", "providers", "sol-types"] }
+tokio = { version = "1.40.0", features = ["full"] }
 futures = "0.3.31"
 dotenv = "0.15.0"
+env_logger = "0.11.5"
+log = "0.4.22"
 
