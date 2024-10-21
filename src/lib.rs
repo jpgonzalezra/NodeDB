@@ -78,12 +78,13 @@ impl NodeDB {
         }
 
         // the account does not exist, fetch it from the provider and the insert into the database
-        let account = self.basic_ref(account_address)?.unwrap();
+        let account = self.basic(account_address)?.unwrap();
         self.insert_account_info(account_address, account, insertion_type);
 
         // account is now inserted into database, fetch and insert storage
         let node_db_account = self.accounts.get_mut(&account_address).unwrap();
         node_db_account.storage.insert(slot, value);
+        println!("{:#?}", self.accounts.get(&account_address));
         return Ok(())
     }
 
@@ -167,17 +168,35 @@ impl DatabaseRef for NodeDB {
     type Error = eyre::Error;
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        if let Some(account) = self.accounts.get(&address) {
+            if account.insertion_type == InsertionType::Custom {
+                return Ok(Some(account.info.clone()));
+            }
+        }
+
         self.update_provider()?;
         let account = self.db_provider.read().unwrap().basic_account(address)?.unwrap();
-        let code = self.db_provider.read().unwrap().account_code(address)?.unwrap();
+        println!("address {:?}", address);
+        let code = self.db_provider.read().unwrap().account_code(address)?;
+
+        let account_info = if let Some(code) = code {
+            AccountInfo::new(
+                account.balance,
+                account.nonce,
+                code.hash_slow(),
+                Bytecode::new_raw(code.original_bytes()),
+            )
+        } else {
+            AccountInfo::new(
+                account.balance,
+                account.nonce,
+                KECCAK_EMPTY,
+                Bytecode::new()
+            )
+        };
 
 
-        Ok(Some(AccountInfo::new(
-            account.balance,
-            account.nonce,
-            code.hash_slow(),
-            Bytecode::new_raw(code.original_bytes()),
-        )))
+        Ok(Some(account_info))
     }
 
     fn code_by_hash_ref(&self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
@@ -187,6 +206,7 @@ impl DatabaseRef for NodeDB {
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         self.update_provider()?;
         let value = self.db_provider.read().unwrap().storage(address, index.into())?;
+        println!("{address} {index}");
         Ok(value.unwrap())
     }
 
@@ -253,7 +273,7 @@ impl DatabaseCommit for NodeDB {
 
 // Enum representing if an account was fetched from the chain or 
 // custom data that was inserted into the database
-#[derive(Default, Eq, PartialEq, Copy, Clone)]
+#[derive(Default, Eq, PartialEq, Copy, Clone, Debug)]
 pub enum InsertionType {
     Custom,
     #[default]
@@ -261,8 +281,8 @@ pub enum InsertionType {
 }
 
 // Structure to represent an account in the NodeDB
-#[derive(Default, Clone)]
-pub struct NodeDBAccount {
+#[derive(Default, Clone, Debug)]
+struct NodeDBAccount {
     pub info: AccountInfo,
     pub state: AccountState,
     pub storage: HashMap<U256, U256>,
