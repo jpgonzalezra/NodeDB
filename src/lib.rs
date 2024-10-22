@@ -238,6 +238,15 @@ impl DatabaseRef for NodeDB {
     }
 
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        // if account exista and slot is custom, just return value
+        if let Some(account) = self.accounts.get(&address) {
+            if let Some(value) = account.storage.get(&index) {
+                if value.insertion_type == InsertionType::Custom {
+                    return Ok(value.value);
+                }
+            }
+        }
+
         self.update_provider()?;
         let value = self
             .db_provider
