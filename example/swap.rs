@@ -75,7 +75,6 @@ async fn main() -> Result<()> {
     evm.transact_commit().unwrap();
 
     // we now have some of the input token and we have approved the router to spend it
-    // try a swap to see if if it is valid
 
     // setup calldata based on the swap type
     let calldata = V2Swap::swapExactTokensForTokensCall {

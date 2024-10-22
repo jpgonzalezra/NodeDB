@@ -15,6 +15,10 @@ path = "example/quote.rs"
 name = "custom-slot"
 path = "example/custom_slot.rs"
 
+[[bin]]
+name = "custom-account"
+path = "example/custom_account.rs"
+
 [[bin]] 
 name = "approval"
 path = "example/approval.rs"
