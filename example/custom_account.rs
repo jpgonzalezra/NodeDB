@@ -13,7 +13,6 @@ sol!(Counter, "example/counter.json");
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // on chain addresses
     // dummy addresses
     let counter_address = address!("A5C381211A406b48A073E954e6949B0D49506bc0");
     let caller = address!("0000000000000000000000000000000000000001");
