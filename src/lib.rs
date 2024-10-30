@@ -107,10 +107,11 @@ impl NodeDB {
 
     // Update the provider to access state from the latest block
     fn update_provider(&self) -> Result<()> {
-        let current_block = self.provider_factory.last_block_number()?;
-        if current_block > self.db_block.load(Ordering::Relaxed) {
-            self.db_block.store(current_block, Ordering::Relaxed);
-            *self.db_provider.write().unwrap() = self.provider_factory.latest()?;
+        if let Ok(current_block) = self.provider_factory.last_block_number() {
+            if current_block > self.db_block.load(Ordering::Relaxed) {
+                self.db_block.store(current_block, Ordering::Relaxed);
+                *self.db_provider.write().unwrap() = self.provider_factory.latest()?;
+            }
         }
         Ok(())
     }
