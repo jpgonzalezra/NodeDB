@@ -1,12 +1,11 @@
 use alloy::primitives::{address, U256};
-use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
 use eyre::Result;
+use alloy::sol;
 use node_db::{InsertionType, NodeDB};
-use revm::state::{AccountInfo, Bytecode};
-use revm::wiring::default::TransactTo;
-use revm::wiring::EthereumWiring;
+use revm::primitives::{AccountInfo, Bytecode, TransactTo};
 use revm::Evm;
+
 
 // Generate contract bindings
 sol!(Counter, "example/counter.json");
@@ -35,12 +34,8 @@ async fn main() -> Result<()> {
     let increment_calldata = Counter::incrementCall {}.abi_encode();
 
     // construct the evm instance
-    let mut evm = Evm::<EthereumWiring<&mut NodeDB, ()>>::builder()
+    let mut evm = Evm::builder()
         .with_db(&mut nodedb)
-        .with_default_ext_ctx()
-        .modify_cfg_env(|env| {
-            env.disable_nonce_check = true;
-        })
         .modify_tx_env(|tx| {
             tx.caller = caller;
             tx.transact_to = TransactTo::Call(counter_address);

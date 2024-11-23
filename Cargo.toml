@@ -31,12 +31,12 @@ reth-db = {git = "https://github.com/paradigmxyz/reth", package = "reth-db"}
 reth-chainspec = {git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec"}
 reth-node-ethereum = {git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum"}
 
-revm = {git = "https://github.com/bluealloy/revm" }
-revm-database = { git = "https://github.com/bluealloy/revm", package = "revm-database", features = ["alloydb"] }
-alloy = { version = "0.5.2", features = ["contract", "providers", "sol-types"] }
 tokio = { version = "1.40.0", features = ["full"] }
 futures = "0.3.31"
 dotenv = "0.15.0"
 env_logger = "0.11.5"
 log = "0.4.22"
+alloy = { version = "0.5.2", features = ["contract", "dyn-abi"] }
+revm = { version = "18.0.0", features = ["alloydb"] }
+foldhash = "0.1.3"
 

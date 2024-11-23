@@ -8,10 +8,10 @@ use reth::utils::open_db_read_only;
 use reth_chainspec::ChainSpecBuilder;
 use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
 use reth_node_ethereum::EthereumNode;
+use revm::db::AccountState;
 use revm::primitives::KECCAK_EMPTY;
-use revm::state::{Account, AccountInfo, Bytecode};
+use revm::primitives::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
-use revm_database::AccountState;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -277,7 +277,7 @@ impl DatabaseRef for NodeDB {
 }
 
 impl DatabaseCommit for NodeDB {
-    fn commit(&mut self, changes: HashMap<Address, Account>) {
+    fn commit(&mut self, changes: HashMap<Address, Account, foldhash::fast::RandomState>) {
         for (address, mut account) in changes {
             if !account.is_touched() {
                 continue;
