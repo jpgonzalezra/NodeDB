@@ -19,24 +19,23 @@ path = "example/custom_slot.rs"
 name = "custom-account"
 path = "example/custom_account.rs"
 
-[[bin]] 
+[[bin]]
 name = "approval"
 path = "example/approval.rs"
 
 [dependencies]
-anyhow = "1.0.90"
+anyhow = "1.0.94"
 eyre = "0.6.12"
-reth = {git = "https://github.com/paradigmxyz/reth"}
-reth-db = {git = "https://github.com/paradigmxyz/reth", package = "reth-db"}
-reth-chainspec = {git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec"}
-reth-node-ethereum = {git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum"}
+reth = { git = "https://github.com/paradigmxyz/reth", version = "1.1.1" }
+reth-db = { git = "https://github.com/paradigmxyz/reth", package = "reth-db", version = "1.1.1" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec", version = "1.1.1" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum", version = "1.1.1" }
 
-tokio = { version = "1.40.0", features = ["full"] }
+tokio = { version = "1.42.0", features = ["full"] }
 futures = "0.3.31"
 dotenv = "0.15.0"
 env_logger = "0.11.5"
 log = "0.4.22"
-alloy = { version = "0.5.2", features = ["contract", "dyn-abi"] }
+alloy = { version = "0.5.4", features = ["contract", "dyn-abi"] }
 revm = { version = "18.0.0", features = ["alloydb"] }
 foldhash = "0.1.3"
-
