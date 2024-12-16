@@ -26,10 +26,10 @@ path = "example/approval.rs"
 [dependencies]
 anyhow = "1.0.94"
 eyre = "0.6.12"
-reth = { git = "https://github.com/paradigmxyz/reth", version = "1.1.1" }
-reth-db = { git = "https://github.com/paradigmxyz/reth", package = "reth-db", version = "1.1.1" }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec", version = "1.1.1" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum", version = "1.1.1" }
+reth = { git = "https://github.com/paradigmxyz/reth", tag = "v1.0.0" }
+reth-db = { git = "https://github.com/paradigmxyz/reth", package = "reth-db", tag = "v1.0.0" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec", tag = "v1.0.0" }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum", tag = "v1.0.0" }
 
 tokio = { version = "1.41.1", features = ["full"] }
 futures = "0.3.31"
