@@ -1,7 +1,7 @@
 use alloy::primitives::{address, U256};
+use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
 use eyre::Result;
-use alloy::sol;
 use node_db::{InsertionType, NodeDB};
 use revm::primitives::{keccak256, TransactTo};
 use revm::Evm;

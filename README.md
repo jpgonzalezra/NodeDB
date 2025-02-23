@@ -3,6 +3,9 @@ NodeDB is a revm DB implementation that hooks directly into the reth database an
 
 Current baked in revm DB implementations cache state without fetching from provider (CacheDB), fetch state from provider but dont dont allow you to insert accounts/storage (AlloyDB), or fetch state and cache it which results in old state (CacheDB(AlloyDB)). 
 
+# Note
+If you are running reth 1.2, you must enable immediate block flushing via `--engine.persistence-threshold 0` and `--engine.memory-block-buffer-target 0`
+
 # Usage
 ```rust
 use node_db::NodeDB;

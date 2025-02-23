@@ -26,17 +26,17 @@ path = "example/approval.rs"
 [dependencies]
 anyhow = "1.0.90"
 eyre = "0.6.12"
-reth = {git = "https://github.com/paradigmxyz/reth"}
-reth-db = {git = "https://github.com/paradigmxyz/reth", package = "reth-db"}
-reth-chainspec = {git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec"}
-reth-node-ethereum = {git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum"}
+reth = {git = "https://github.com/paradigmxyz/reth", rev = "1ba631b" }
+reth-db = {git = "https://github.com/paradigmxyz/reth", package = "reth-db", rev = "1ba631b"}
+reth-chainspec = {git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec", rev = "1ba631b" }
+reth-node-ethereum = {git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum", rev = "1ba631b" }
 
 tokio = { version = "1.40.0", features = ["full"] }
 futures = "0.3.31"
 dotenv = "0.15.0"
 env_logger = "0.11.5"
 log = "0.4.22"
-alloy = { version = "0.5.2", features = ["contract", "dyn-abi"] }
-revm = { version = "18.0.0", features = ["alloydb"] }
+alloy = { version = "0.7", features = ["contract", "dyn-abi"] }
+revm = { version = "19.5.0", features = ["alloydb"] }
 foldhash = "0.1.3"
 
