@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use alloy::primitives::{address, Uint, U256};
 use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
@@ -43,6 +45,8 @@ async fn main() -> Result<()> {
 
     let db_path = std::env::var("DB_PATH")?;
     let mut db = NodeDB::new(db_path)?;
+
+    let start = Instant::now();
 
     let balance_slot = keccak256((account, U256::from(3)).abi_encode());
     db.insert_account_storage(
@@ -130,8 +134,10 @@ async fn main() -> Result<()> {
         ExecutionResult::Success { output, .. } => {
             let out = U256::abi_decode(output.data(), false)?;
             println!(
-                "Swapped {} WETH for {} USDC After Deposit and balanceOf",
-                balance, out
+                "Swapped {} WETH for {} USDC After Deposit and balanceOf in {:?}",
+                balance,
+                out,
+                start.elapsed()
             );
         }
         result => return Err(anyhow!("swap failed: {result:?}")),
