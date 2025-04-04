@@ -23,6 +23,10 @@ path = "example/custom_account.rs"
 name = "approval"
 path = "example/approval.rs"
 
+[[bin]]
+name = "deposit_eth_swap_univ3"
+path = "example/deposit_eth_swap_univ3.rs"
+
 [dependencies]
 anyhow = "1.0.97"
 eyre = "0.6.12"
