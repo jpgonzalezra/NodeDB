@@ -1,10 +1,12 @@
 use alloy::primitives::{address, U256};
 use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
+use eyre::anyhow;
 use eyre::Result;
 use node_db::{InsertionType, NodeDB};
-use revm::primitives::{keccak256, TransactTo};
-use revm::Evm;
+use revm::context::result::ExecutionResult;
+use revm::primitives::{keccak256, TxKind};
+use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
 
 sol!(
     #[sol(rpc)]
@@ -49,24 +51,38 @@ async fn main() -> Result<()> {
         InsertionType::OnChain, // weth has a corresponding onchain contract
     )?;
 
-    // construct a new evm instance
-    let mut evm = Evm::builder()
-        .with_db(&mut nodedb)
-        .modify_tx_env(|tx| {
-            tx.caller = account;
-            tx.value = U256::ZERO;
-        })
-        .build();
-
     // setup approval call and commit the transaction
     let approve_calldata = ERC20Token::approveCall {
         spender: uniswap_router,
         amount: U256::from(10e18),
     }
     .abi_encode();
-    evm.tx_mut().transact_to = TransactTo::Call(weth);
-    evm.tx_mut().data = approve_calldata.into();
-    evm.transact_commit().unwrap();
+    // construct a new evm instance
+    let mut evm: revm::context::Evm<
+        Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &mut NodeDB>,
+        (),
+        revm::handler::instructions::EthInstructions<
+            revm::interpreter::interpreter::EthInterpreter,
+            Context<
+                revm::context::BlockEnv,
+                revm::context::TxEnv,
+                revm::context::CfgEnv,
+                &mut NodeDB,
+            >,
+        >,
+        revm::handler::EthPrecompiles,
+    > = Context::mainnet()
+        .with_db(&mut nodedb)
+        .modify_tx_chained(|tx| {
+            tx.caller = account;
+            tx.value = U256::ZERO;
+            tx.kind = TxKind::Call(weth);
+            tx.data = approve_calldata.into();
+        })
+        .build_mainnet();
+    ();
+
+    evm.replay_commit().unwrap();
 
     // we now have some of the input token and we have approved the router to spend it
 
@@ -81,14 +97,38 @@ async fn main() -> Result<()> {
     .abi_encode();
 
     // set call to the router
-    evm.tx_mut().transact_to = TransactTo::Call(uniswap_router);
-    evm.tx_mut().data = calldata.into();
+    let mut evm: revm::context::Evm<
+        Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &mut NodeDB>,
+        (),
+        revm::handler::instructions::EthInstructions<
+            revm::interpreter::interpreter::EthInterpreter,
+            Context<
+                revm::context::BlockEnv,
+                revm::context::TxEnv,
+                revm::context::CfgEnv,
+                &mut NodeDB,
+            >,
+        >,
+        revm::handler::EthPrecompiles,
+    > = Context::mainnet()
+        .with_db(&mut nodedb)
+        .modify_tx_chained(|tx| {
+            tx.caller = account;
+            tx.value = U256::ZERO;
+            tx.kind = TxKind::Call(uniswap_router);
+            tx.data = calldata.into();
+        })
+        .build_mainnet();
+    ();
 
     // if we can transact, add it as it is a valid pool. Else ignore it
-    let ref_tx = evm.transact().unwrap();
-    let result = ref_tx.result;
-    let output = result.output().unwrap();
-    let decoded_outputs = <Vec<U256>>::abi_decode(output, false).unwrap();
+    let ref_tx = evm.replay_commit().unwrap();
+    let output = match ref_tx {
+        ExecutionResult::Success { output, .. } => output,
+        result => return Err(anyhow!("'swap' execution failed: {result:?}")),
+    };
+
+    let decoded_outputs = <Vec<U256>>::abi_decode(output.data(), false).unwrap();
     println!(
         "Swapped 1 WETH for {} USDC",
         decoded_outputs.get(1).unwrap()

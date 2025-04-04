@@ -1,10 +1,12 @@
 use alloy::primitives::{address, U256};
 use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
+use eyre::anyhow;
 use eyre::Result;
 use node_db::{InsertionType, NodeDB};
-use revm::primitives::{keccak256, TransactTo};
-use revm::Evm;
+use revm::context::result::ExecutionResult;
+use revm::primitives::{keccak256, TxKind};
+use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
 
 // function signature
 sol!(
@@ -37,19 +39,23 @@ async fn main() -> Result<()> {
     let balance_calldata = ERC20Token::balanceOfCall { account }.abi_encode();
 
     // construct a new evm instance
-    let mut evm = Evm::builder()
+    let mut evm = Context::mainnet()
         .with_db(&mut nodedb)
-        .modify_tx_env(|tx| {
+        .modify_tx_chained(|tx| {
             tx.caller = account;
             tx.value = U256::ZERO;
             tx.data = balance_calldata.into();
-            tx.transact_to = TransactTo::Call(weth);
+            tx.kind = TxKind::Call(weth);
         })
-        .build();
-    let ref_tx = evm.transact().unwrap();
-    let result = ref_tx.result;
-    let output = result.output().unwrap();
-    let balance = <U256>::abi_decode(output, false).unwrap();
+        .build_mainnet();
+    let ref_tx = evm.replay_commit().unwrap();
+
+    let output = match ref_tx {
+        ExecutionResult::Success { output, .. } => output,
+        result => return Err(anyhow!("'swap' execution failed: {result:?}")),
+    };
+
+    let balance = <U256>::abi_decode(output.data(), false).unwrap();
     println!("Account has custom balance {:?}", balance);
     Ok(())
 }
