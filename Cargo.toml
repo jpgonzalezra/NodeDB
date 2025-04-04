@@ -24,8 +24,8 @@ name = "approval"
 path = "example/approval.rs"
 
 [[bin]]
-name = "deposit_eth_swap_univ3"
-path = "example/deposit_eth_swap_univ3.rs"
+name = "deposit_eth_and_swap_univ3"
+path = "example/deposit_eth_and_swap_univ3.rs"
 
 [dependencies]
 anyhow = "1.0.97"

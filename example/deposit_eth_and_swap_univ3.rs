@@ -46,8 +46,6 @@ async fn main() -> Result<()> {
     let db_path = std::env::var("DB_PATH")?;
     let mut db = NodeDB::new(db_path)?;
 
-    let start = Instant::now();
-
     let balance_slot = keccak256((account, U256::from(3)).abi_encode());
     db.insert_account_storage(
         weth,
@@ -57,6 +55,7 @@ async fn main() -> Result<()> {
     )?;
     let deposit_calldata = WETH::depositCall {}.abi_encode();
 
+    let start = Instant::now();
     let mut evm = Context::mainnet()
         .with_db(&mut db)
         .modify_tx_chained(|tx| {
