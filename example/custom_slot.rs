@@ -1,7 +1,7 @@
 use alloy::primitives::{address, U256};
+use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
 use eyre::Result;
-use alloy::sol;
 use node_db::{InsertionType, NodeDB};
 use revm::primitives::{keccak256, TransactTo};
 use revm::Evm;
@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     let weth = address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
 
     // construct the database
-    let database_path = String::from("/mnt/eth-docker-data");
+    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
 
     // give our account some weth

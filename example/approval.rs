@@ -1,10 +1,12 @@
 use alloy::primitives::{address, U256};
 use alloy::sol;
 use alloy::sol_types::{SolCall, SolValue};
+use eyre::anyhow;
 use eyre::Result;
 use node_db::{InsertionType, NodeDB};
-use revm::primitives::{keccak256, TransactTo};
-use revm::Evm;
+use revm::context::result::ExecutionResult;
+use revm::primitives::{keccak256, TxKind};
+use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
 
 // Appoval and Allowance function signatures
 sol!(
@@ -37,24 +39,25 @@ async fn main() -> Result<()> {
         InsertionType::OnChain, // weth has a corresponding onchain contract
     )?;
 
-    // construct a new evm instance
-    let mut evm = Evm::builder()
-        .with_db(&mut nodedb)
-        .modify_tx_env(|tx| {
-            tx.caller = account;
-            tx.value = U256::ZERO;
-        })
-        .build();
-
     // setup approval call and commit the transaction
     let approve_calldata = ERC20Token::approveCall {
         spender: uniswap_router,
         amount: U256::from(10e18),
     }
     .abi_encode();
-    evm.tx_mut().transact_to = TransactTo::Call(weth);
-    evm.tx_mut().data = approve_calldata.into();
-    evm.transact_commit().unwrap();
+
+    // construct a new evm instance
+    let mut evm = Context::mainnet()
+        .with_db(&mut nodedb)
+        .modify_tx_chained(|tx| {
+            tx.caller = account;
+            tx.kind = TxKind::Call(weth);
+            tx.value = U256::ZERO;
+            tx.data = approve_calldata.into();
+        })
+        .build_mainnet();
+
+    evm.replay_commit().unwrap();
 
     // now confirm the allowance for the router
     let allowance_calldata = ERC20Token::allowanceCall {
@@ -62,11 +65,25 @@ async fn main() -> Result<()> {
         spender: uniswap_router,
     }
     .abi_encode();
-    evm.tx_mut().data = allowance_calldata.into();
-    let ref_tx = evm.transact().unwrap();
-    let result = ref_tx.result;
-    let output = result.output().unwrap();
-    let allowance = <U256>::abi_decode(output, false).unwrap();
+
+    let mut evm = Context::mainnet()
+        .with_db(&mut nodedb)
+        .modify_tx_chained(|tx| {
+            tx.caller = account;
+            tx.kind = TxKind::Call(weth);
+            tx.value = U256::ZERO;
+            tx.data = allowance_calldata.into();
+        })
+        .build_mainnet();
+
+    let ref_tx = evm.replay_commit().unwrap();
+
+    let output = match ref_tx {
+        ExecutionResult::Success { output, .. } => output,
+        result => return Err(anyhow!("'swap' execution failed: {result:?}")),
+    };
+
+    let allowance = <U256>::abi_decode(output.data(), false).unwrap();
     println!("The router is allowed to spend {:?} weth", allowance);
 
     Ok(())

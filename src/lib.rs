@@ -8,14 +8,30 @@ use reth::utils::open_db_read_only;
 use reth_chainspec::ChainSpecBuilder;
 use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
 use reth_node_ethereum::EthereumNode;
-use revm::db::AccountState;
+use revm::context::DBErrorMarker;
+use revm::database::AccountState;
 use revm::primitives::KECCAK_EMPTY;
-use revm::primitives::{Account, AccountInfo, Bytecode};
+use revm::state::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
+
+#[derive(Debug)]
+pub struct NodeDBError(pub String);
+
+impl fmt::Display for NodeDBError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NodeDBError: {}", self.0)
+    }
+}
+
+impl Error for NodeDBError {}
+
+impl DBErrorMarker for NodeDBError {}
 
 // Main structure for the Node Database
 pub struct NodeDB {
@@ -119,7 +135,7 @@ impl NodeDB {
 
 // Implement the Database trait for NodeDB
 impl Database for NodeDB {
-    type Error = eyre::Error;
+    type Error = NodeDBError;
 
     fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         // If the account exists and it is custom, we know there is no corresponding on chain state
@@ -196,7 +212,7 @@ impl Database for NodeDB {
 
 // Implement the DatabaseRef trait for NodeDB
 impl DatabaseRef for NodeDB {
-    type Error = eyre::Error;
+    type Error = NodeDBError;
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         // If the account exists and it is custom, just return it. Otherwise update from the chain
@@ -207,14 +223,22 @@ impl DatabaseRef for NodeDB {
         }
 
         // Fetch info
-        self.update_provider()?;
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
         let account = self
             .db_provider
             .read()
             .unwrap()
-            .basic_account(address)?
+            .basic_account(address)
+            .map_err(|e| NodeDBError(e.to_string()))?
             .unwrap();
-        let code = self.db_provider.read().unwrap().account_code(address)?;
+        let code = self
+            .db_provider
+            .read()
+            .unwrap()
+            .account_code(address)
+            .map_err(|e| NodeDBError(e.to_string()))?;
         let account_info = if let Some(code) = code {
             AccountInfo::new(
                 account.balance,
@@ -248,12 +272,15 @@ impl DatabaseRef for NodeDB {
             }
         }
 
-        self.update_provider()?;
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
         let value = self
             .db_provider
             .read()
             .unwrap()
-            .storage(address, index.into())?;
+            .storage(address, index.into())
+            .map_err(|e| NodeDBError(e.to_string()))?;
 
         let value = if let Some(storage_val) = value {
             storage_val
@@ -265,8 +292,15 @@ impl DatabaseRef for NodeDB {
     }
 
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        self.update_provider()?;
-        let blockhash = self.db_provider.read().unwrap().block_hash(number)?;
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
+        let blockhash = self
+            .db_provider
+            .read()
+            .unwrap()
+            .block_hash(number)
+            .map_err(|e| NodeDBError(e.to_string()))?;
 
         if let Some(hash) = blockhash {
             Ok(B256::new(hash.0))
