@@ -13,7 +13,7 @@ use revm::database::AccountState;
 use revm::primitives::KECCAK_EMPTY;
 use revm::state::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
@@ -40,6 +40,8 @@ pub struct NodeDB {
     accounts: HashMap<Address, NodeDBAccount>,
     db_block: AtomicU64,
     contracts: HashMap<B256, Bytecode>,
+    accessed_slots: RwLock<HashMap<Address, HashSet<U256>>>,
+    tracing_enabled: bool,
 }
 
 impl NodeDB {
@@ -71,7 +73,36 @@ impl NodeDB {
             accounts: HashMap::new(),
             db_block: AtomicU64::new(db_block),
             contracts: HashMap::new(),
+            accessed_slots: RwLock::new(HashMap::new()),
+            tracing_enabled: false,
         })
+    }
+
+    pub fn enable_tracing(&mut self) -> Result<()> {
+        let mut slots = self.accessed_slots.write().map_err(|_| {
+            NodeDBError(
+                "Failed to acquire write lock on accessed_slots in enable_tracing".to_string(),
+            )
+        })?;
+
+        self.tracing_enabled = true;
+        slots.clear();
+        Ok(())
+    }
+
+    pub fn disable_tracing(&mut self) {
+        self.tracing_enabled = false;
+    }
+
+    pub fn get_accessed_slots(&self, target_address: Address) -> Result<Vec<U256>> {
+        let slots = self.accessed_slots.read().map_err(|_| {
+            NodeDBError("Failed to acquire read lock on accessed_slots".to_string())
+        })?;
+
+        Ok(slots
+            .get(&target_address)
+            .map(|slot_set| slot_set.iter().cloned().collect())
+            .unwrap_or_else(Vec::new))
     }
 
     // Insert account information into the database
@@ -163,6 +194,16 @@ impl Database for NodeDB {
     }
 
     fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        // Log slot access if tracing is enabled
+        if self.tracing_enabled {
+            let mut slots = self.accessed_slots.write().map_err(|_| {
+                NodeDBError("Failed to acquire write lock on accessed_slots".to_string())
+            })?;
+            slots
+                .entry(address)
+                .or_insert_with(HashSet::new)
+                .insert(index.into());
+        }
         // Check if the account and the slot exist
         if let Some(account) = self.accounts.get(&address) {
             if let Some(value) = account.storage.get(&index) {
@@ -263,6 +304,16 @@ impl DatabaseRef for NodeDB {
     }
 
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        // Log slot access if tracing is enabled
+        if self.tracing_enabled {
+            let mut slots = self.accessed_slots.write().map_err(|_| {
+                NodeDBError("Failed to acquire write lock on accessed_slots".to_string())
+            })?;
+            slots
+                .entry(address)
+                .or_insert_with(HashSet::new)
+                .insert(index.into());
+        }
         // if account exista and slot is custom, just return value
         if let Some(account) = self.accounts.get(&address) {
             if let Some(value) = account.storage.get(&index) {
