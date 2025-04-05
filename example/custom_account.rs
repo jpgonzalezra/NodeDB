@@ -1,11 +1,13 @@
 use alloy::primitives::{address, U256};
-use alloy::sol_types::{SolCall, SolValue};
-use eyre::Result;
 use alloy::sol;
+use alloy::sol_types::{SolCall, SolValue};
+use eyre::anyhow;
+use eyre::Result;
 use node_db::{InsertionType, NodeDB};
-use revm::primitives::{AccountInfo, Bytecode, TransactTo};
-use revm::Evm;
-
+use revm::context::result::ExecutionResult;
+use revm::primitives::TxKind;
+use revm::state::{AccountInfo, Bytecode};
+use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
 
 // Generate contract bindings
 sol!(Counter, "example/counter.json");
@@ -17,7 +19,7 @@ async fn main() -> Result<()> {
     let caller = address!("0000000000000000000000000000000000000001");
 
     // construct the database
-    let database_path = String::from("/mnt/eth-docker-data");
+    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
 
     // insert contract account
@@ -34,26 +36,37 @@ async fn main() -> Result<()> {
     let increment_calldata = Counter::incrementCall {}.abi_encode();
 
     // construct the evm instance
-    let mut evm = Evm::builder()
+    let mut evm = Context::mainnet()
         .with_db(&mut nodedb)
-        .modify_tx_env(|tx| {
+        .modify_tx_chained(|tx| {
             tx.caller = caller;
-            tx.transact_to = TransactTo::Call(counter_address);
+            tx.kind = TxKind::Call(counter_address);
             tx.data = increment_calldata.into();
             tx.value = U256::ZERO;
         })
-        .build();
+        .build_mainnet();
 
     // transact and commit this transaction to the database!
-    evm.transact_commit().unwrap();
+    evm.replay_commit().unwrap();
 
     let getcount_calldata = Counter::getCountCall {}.abi_encode();
-    evm.tx_mut().data = getcount_calldata.into();
+    let mut evm = Context::mainnet()
+        .with_db(&mut nodedb)
+        .modify_tx_chained(|tx| {
+            tx.caller = caller;
+            tx.kind = TxKind::Call(counter_address);
+            tx.data = getcount_calldata.into();
+            tx.value = U256::ZERO;
+        })
+        .build_mainnet();
 
-    let ref_tx = evm.transact().unwrap();
-    let result = ref_tx.result;
-    let output = result.output().unwrap();
-    let decoded_output = <U256>::abi_decode(output, false).unwrap();
+    let ref_tx = evm.replay_commit().unwrap();
+
+    let output = match ref_tx {
+        ExecutionResult::Success { output, .. } => output,
+        result => return Err(anyhow!("'swap' execution failed: {result:?}")),
+    };
+    let decoded_output = <U256>::abi_decode(output.data(), false).unwrap();
     println!("Counter after increment = {}", decoded_output);
 
     Ok(())

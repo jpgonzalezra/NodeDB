@@ -1,11 +1,12 @@
 use alloy::primitives::{address, U256};
-use alloy::sol_types::{SolCall, SolValue};
-use eyre::Result;
 use alloy::sol;
+use alloy::sol_types::{SolCall, SolValue};
+use eyre::anyhow;
+use eyre::Result;
 use node_db::NodeDB;
-use revm::primitives::TransactTo;
-use revm::Evm;
-
+use revm::context::result::ExecutionResult;
+use revm::primitives::TxKind;
+use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
 
 // Balance of function signature
 sol!(
@@ -27,7 +28,7 @@ async fn main() -> Result<()> {
     let uniswap = address!("7a250d5630B4cF539739dF2C5dAcb4c659F2488D");
 
     // setup the db
-    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
+    let database_path: String = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
 
     // construct the calldata for weth->usdc quote
@@ -38,20 +39,22 @@ async fn main() -> Result<()> {
     .abi_encode();
 
     // create evm instance and transact
-    let mut evm = Evm::builder()
+    let mut evm = Context::mainnet()
         .with_db(&mut nodedb)
-        .modify_tx_env(|tx| {
+        .modify_tx_chained(|tx| {
             tx.caller = vitalik;
             tx.value = U256::ZERO;
-            tx.transact_to = TransactTo::Call(uniswap);
+            tx.kind = TxKind::Call(uniswap);
             tx.data = out_call.into();
         })
-        .build();
+        .build_mainnet();
 
-    let ref_tx = evm.transact().unwrap();
-    let result = ref_tx.result;
-    let output = result.output().unwrap();
-    let decoded_outputs = <Vec<U256>>::abi_decode(output, false).unwrap();
+    let ref_tx = evm.replay_commit().unwrap();
+    let output = match ref_tx {
+        ExecutionResult::Success { output, .. } => output,
+        result => return Err(anyhow!("'swap' execution failed: {result:?}")),
+    };
+    let decoded_outputs = <Vec<U256>>::abi_decode(output.data(), false).unwrap();
     println!("1 WETH equals {} USDC", decoded_outputs.get(1).unwrap());
 
     Ok(())
