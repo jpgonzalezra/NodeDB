@@ -28,7 +28,6 @@ async fn main() -> Result<()> {
     // construct the database
     let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
     let mut nodedb = NodeDB::new(database_path).unwrap();
-    nodedb.enable_tracing()?;
 
     let start = Instant::now();
     let balance_slot = get_balance_slot(&mut nodedb, weth, account)?;
