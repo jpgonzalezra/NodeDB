@@ -1,5 +1,6 @@
 use alloy::primitives::{Address, B256, U256};
 use eyre::Result;
+use parking_lot::RwLock;
 use reth::api::NodeTypesWithDBAdapter;
 use reth::providers::providers::StaticFileProvider;
 use reth::providers::StateProviderBox;
@@ -18,7 +19,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct NodeDBError(pub String);
@@ -79,11 +80,7 @@ impl NodeDB {
     }
 
     pub fn enable_tracing(&mut self) -> Result<()> {
-        let mut slots = self.accessed_slots.write().map_err(|_| {
-            NodeDBError(
-                "Failed to acquire write lock on accessed_slots in enable_tracing".to_string(),
-            )
-        })?;
+        let mut slots = self.accessed_slots.write();
 
         self.tracing_enabled = true;
         slots.clear();
@@ -95,10 +92,7 @@ impl NodeDB {
     }
 
     pub fn get_accessed_slots(&self, target_address: Address) -> Result<Vec<U256>> {
-        let slots = self.accessed_slots.read().map_err(|_| {
-            NodeDBError("Failed to acquire read lock on accessed_slots".to_string())
-        })?;
-
+        let slots = self.accessed_slots.read();
         Ok(slots
             .get(&target_address)
             .map(|slot_set| slot_set.iter().cloned().collect())
@@ -157,7 +151,7 @@ impl NodeDB {
         if let Ok(current_block) = self.provider_factory.last_block_number() {
             if current_block > self.db_block.load(Ordering::Relaxed) {
                 self.db_block.store(current_block, Ordering::Relaxed);
-                *self.db_provider.write().unwrap() = self.provider_factory.latest()?;
+                *self.db_provider.write() = self.provider_factory.latest()?;
             }
         }
         Ok(())
@@ -196,9 +190,7 @@ impl Database for NodeDB {
     fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
         // Log slot access if tracing is enabled
         if self.tracing_enabled {
-            let mut slots = self.accessed_slots.write().map_err(|_| {
-                NodeDBError("Failed to acquire write lock on accessed_slots".to_string())
-            })?;
+            let mut slots = self.accessed_slots.write();
             slots
                 .entry(address)
                 .or_insert_with(HashSet::new)
@@ -270,14 +262,12 @@ impl DatabaseRef for NodeDB {
         let account = self
             .db_provider
             .read()
-            .unwrap()
             .basic_account(address)
             .map_err(|e| NodeDBError(e.to_string()))?
             .unwrap();
         let code = self
             .db_provider
             .read()
-            .unwrap()
             .account_code(address)
             .map_err(|e| NodeDBError(e.to_string()))?;
         let account_info = if let Some(code) = code {
@@ -306,9 +296,7 @@ impl DatabaseRef for NodeDB {
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         // Log slot access if tracing is enabled
         if self.tracing_enabled {
-            let mut slots = self.accessed_slots.write().map_err(|_| {
-                NodeDBError("Failed to acquire write lock on accessed_slots".to_string())
-            })?;
+            let mut slots = self.accessed_slots.write();
             slots
                 .entry(address)
                 .or_insert_with(HashSet::new)
@@ -329,7 +317,6 @@ impl DatabaseRef for NodeDB {
         let value = self
             .db_provider
             .read()
-            .unwrap()
             .storage(address, index.into())
             .map_err(|e| NodeDBError(e.to_string()))?;
 
@@ -349,7 +336,6 @@ impl DatabaseRef for NodeDB {
         let blockhash = self
             .db_provider
             .read()
-            .unwrap()
             .block_hash(number)
             .map_err(|e| NodeDBError(e.to_string()))?;
 
