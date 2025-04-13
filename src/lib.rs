@@ -1,17 +1,13 @@
-use alloy::primitives::{Address, B256, U256};
 use eyre::Result;
 use parking_lot::RwLock;
-use reth::api::NodeTypesWithDBAdapter;
-use reth::providers::providers::StaticFileProvider;
-use reth::providers::StateProviderBox;
-use reth::providers::{BlockNumReader, ProviderFactory};
-use reth::utils::open_db_read_only;
+use reth_node_api::NodeTypesWithDBAdapter;
+use reth_provider::{BlockNumReader, ProviderFactory, StateProviderBox, providers::StaticFileProvider};
 use reth_chainspec::ChainSpecBuilder;
-use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
+use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv, open_db_read_only};
 use reth_node_ethereum::EthereumNode;
 use revm::context::DBErrorMarker;
 use revm::database::AccountState;
-use revm::primitives::KECCAK_EMPTY;
+use revm::primitives::{KECCAK_EMPTY, Address, U256, B256};
 use revm::state::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
 use std::collections::{HashMap, HashSet};
@@ -96,7 +92,7 @@ impl NodeDB {
         Ok(slots
             .get(&target_address)
             .map(|slot_set| slot_set.iter().cloned().collect())
-            .unwrap_or_else(Vec::new))
+            .unwrap_or_default())
     }
 
     // Insert account information into the database
@@ -193,8 +189,8 @@ impl Database for NodeDB {
             let mut slots = self.accessed_slots.write();
             slots
                 .entry(address)
-                .or_insert_with(HashSet::new)
-                .insert(index.into());
+                .or_default()
+                .insert(index);
         }
         // Check if the account and the slot exist
         if let Some(account) = self.accounts.get(&address) {
@@ -262,13 +258,13 @@ impl DatabaseRef for NodeDB {
         let account = self
             .db_provider
             .read()
-            .basic_account(address)
+            .basic_account(&address)
             .map_err(|e| NodeDBError(e.to_string()))?
             .unwrap();
         let code = self
             .db_provider
             .read()
-            .account_code(address)
+            .account_code(&address)
             .map_err(|e| NodeDBError(e.to_string()))?;
         let account_info = if let Some(code) = code {
             AccountInfo::new(
@@ -299,8 +295,8 @@ impl DatabaseRef for NodeDB {
             let mut slots = self.accessed_slots.write();
             slots
                 .entry(address)
-                .or_insert_with(HashSet::new)
-                .insert(index.into());
+                .or_default()
+                .insert(index);
         }
         // if account exista and slot is custom, just return value
         if let Some(account) = self.accounts.get(&address) {

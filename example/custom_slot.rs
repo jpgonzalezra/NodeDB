@@ -1,6 +1,5 @@
-use alloy::primitives::{address, U256};
-use alloy::sol;
-use alloy::sol_types::{SolCall, SolValue};
+use alloy_primitives::{address, U256};
+use alloy_sol_types::{SolCall, SolValue, sol};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::{InsertionType, NodeDB};

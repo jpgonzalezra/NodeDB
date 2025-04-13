@@ -30,18 +30,23 @@ path = "example/get_balance_slot.rs"
 [dependencies]
 anyhow = "1.0.97"
 eyre = "0.6.12"
-reth = { git = "https://github.com/paradigmxyz/reth", rev = "1ba631b" }
-reth-db = { git = "https://github.com/paradigmxyz/reth", package = "reth-db", rev = "1ba631b" }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", package = "reth-chainspec", rev = "1ba631b" }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", package = "reth-node-ethereum", rev = "1ba631b" }
-parking_lot = "0.12.3"
 
+reth-db= { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
+reth-node-api= { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
+reth-provider= { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
+
+alloy-primitives = "0.8.25"
+alloy-sol-types = { version = "0.8.25", features = ["json"] }
+alloy-contract = "0.13.0"
+
+
+parking_lot = "0.12.3"
 tokio = { version = "1.44.1", features = ["full"] }
 futures = "0.3.31"
 dotenv = "0.15.0"
 env_logger = "0.11.8"
 log = "0.4.27"
-alloy = { version = "0.12.6", features = ["contract", "dyn-abi"] }
-alloy-dyn-abi = "1.0.0"
-revm = { version = "20.0.0", features = ["alloydb"] }
+revm = { version = "21.0.0", features = ["alloydb"] }
 foldhash = "0.1.5"

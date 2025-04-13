@@ -1,13 +1,12 @@
-use alloy::primitives::{address, U256};
-use alloy::sol;
-use alloy::sol_types::{SolCall, SolValue};
+use alloy_primitives::{address, U256};
+use alloy_sol_types::{SolCall, SolValue, sol};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::{InsertionType, NodeDB};
 use revm::context::result::ExecutionResult;
 use revm::primitives::TxKind;
 use revm::state::{AccountInfo, Bytecode};
-use revm::{Context, ExecuteCommitEvm, MainBuilder, MainContext};
+use revm::{Context, ExecuteEvm, MainBuilder, MainContext, ExecuteCommitEvm};
 
 // Generate contract bindings
 sol!(Counter, "example/counter.json");
@@ -60,7 +59,7 @@ async fn main() -> Result<()> {
         })
         .build_mainnet();
 
-    let ref_tx = evm.replay_commit().unwrap();
+    let ref_tx = evm.replay().unwrap().result;
 
     let output = match ref_tx {
         ExecutionResult::Success { output, .. } => output,

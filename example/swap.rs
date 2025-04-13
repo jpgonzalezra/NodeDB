@@ -1,6 +1,5 @@
-use alloy::primitives::{address, U256};
-use alloy::sol;
-use alloy::sol_types::{SolCall, SolValue};
+use alloy_primitives::{address, U256};
+use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::{InsertionType, NodeDB};
@@ -58,20 +57,7 @@ async fn main() -> Result<()> {
     }
     .abi_encode();
     // construct a new evm instance
-    let mut evm: revm::context::Evm<
-        Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &mut NodeDB>,
-        (),
-        revm::handler::instructions::EthInstructions<
-            revm::interpreter::interpreter::EthInterpreter,
-            Context<
-                revm::context::BlockEnv,
-                revm::context::TxEnv,
-                revm::context::CfgEnv,
-                &mut NodeDB,
-            >,
-        >,
-        revm::handler::EthPrecompiles,
-    > = Context::mainnet()
+    let mut evm = Context::mainnet()
         .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = account;
@@ -80,7 +66,6 @@ async fn main() -> Result<()> {
             tx.data = approve_calldata.into();
         })
         .build_mainnet();
-    ();
 
     evm.replay_commit().unwrap();
 
@@ -97,20 +82,7 @@ async fn main() -> Result<()> {
     .abi_encode();
 
     // set call to the router
-    let mut evm: revm::context::Evm<
-        Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &mut NodeDB>,
-        (),
-        revm::handler::instructions::EthInstructions<
-            revm::interpreter::interpreter::EthInterpreter,
-            Context<
-                revm::context::BlockEnv,
-                revm::context::TxEnv,
-                revm::context::CfgEnv,
-                &mut NodeDB,
-            >,
-        >,
-        revm::handler::EthPrecompiles,
-    > = Context::mainnet()
+    let mut evm = Context::mainnet()
         .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = account;
@@ -119,7 +91,6 @@ async fn main() -> Result<()> {
             tx.data = calldata.into();
         })
         .build_mainnet();
-    ();
 
     // if we can transact, add it as it is a valid pool. Else ignore it
     let ref_tx = evm.replay_commit().unwrap();
