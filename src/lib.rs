@@ -1,13 +1,15 @@
 use eyre::Result;
 use parking_lot::RwLock;
-use reth_node_api::NodeTypesWithDBAdapter;
-use reth_provider::{BlockNumReader, ProviderFactory, StateProviderBox, providers::StaticFileProvider};
 use reth_chainspec::ChainSpecBuilder;
-use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv, open_db_read_only};
+use reth_db::{mdbx::DatabaseArguments, open_db_read_only, ClientVersion, DatabaseEnv};
+use reth_node_api::NodeTypesWithDBAdapter;
 use reth_node_ethereum::EthereumNode;
+use reth_provider::{
+    providers::StaticFileProvider, BlockNumReader, ProviderFactory, StateProviderBox,
+};
 use revm::context::DBErrorMarker;
 use revm::database::AccountState;
-use revm::primitives::{KECCAK_EMPTY, Address, U256, B256};
+use revm::primitives::{Address, B256, KECCAK_EMPTY, U256};
 use revm::state::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
 use std::collections::{HashMap, HashSet};
@@ -167,10 +169,13 @@ impl Database for NodeDB {
         }
 
         // Fetch the account from the chain
-        let account_info = Self::basic_ref(self, address)?.unwrap();
+        let account_info_opt = Self::basic_ref(self, address)?;
 
-        // If the account exists, update the account info. Otherwise, insert the account into the
-        // database
+        let account_info = match account_info_opt {
+            Some(info) => info,
+            None => return Ok(None),
+        };
+
         match self.accounts.get_mut(&address) {
             Some(account) => account.info = account_info.clone(),
             None => self.insert_account_info(address, account_info.clone(), InsertionType::OnChain),
@@ -187,10 +192,7 @@ impl Database for NodeDB {
         // Log slot access if tracing is enabled
         if self.tracing_enabled {
             let mut slots = self.accessed_slots.write();
-            slots
-                .entry(address)
-                .or_default()
-                .insert(index);
+            slots.entry(address).or_default().insert(index);
         }
         // Check if the account and the slot exist
         if let Some(account) = self.accounts.get(&address) {
@@ -255,17 +257,21 @@ impl DatabaseRef for NodeDB {
         self.update_provider()
             .map_err(|e| NodeDBError(e.to_string()))?;
 
-        let account = self
-            .db_provider
-            .read()
+        let db_provider = self.db_provider.read();
+
+        let account_opt = db_provider
             .basic_account(&address)
-            .map_err(|e| NodeDBError(e.to_string()))?
-            .unwrap();
-        let code = self
-            .db_provider
-            .read()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
+        let account = match account_opt {
+            Some(acc) => acc,
+            None => return Ok(None),
+        };
+
+        let code = db_provider
             .account_code(&address)
             .map_err(|e| NodeDBError(e.to_string()))?;
+
         let account_info = if let Some(code) = code {
             AccountInfo::new(
                 account.balance,
@@ -293,10 +299,7 @@ impl DatabaseRef for NodeDB {
         // Log slot access if tracing is enabled
         if self.tracing_enabled {
             let mut slots = self.accessed_slots.write();
-            slots
-                .entry(address)
-                .or_default()
-                .insert(index);
+            slots.entry(address).or_default().insert(index);
         }
         // if account exista and slot is custom, just return value
         if let Some(account) = self.accounts.get(&address) {
