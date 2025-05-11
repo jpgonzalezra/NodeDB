@@ -273,6 +273,20 @@ where
     }
 
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        // Log slot access if tracing is enabled
+        if self.tracing_enabled {
+            let mut slots = self.accessed_slots.write();
+            slots.entry(address).or_default().insert(index);
+        }
+
+        // Check if the account and the slot exist locally with custom insertion
+        if let Some(account) = self.accounts.get(&address) {
+            if let Some(value) = account.storage.get(&index) {
+                if value.insertion_type == InsertionType::Custom {
+                    return Ok(value.value);
+                }
+            }
+        }
         let value = self.backend.storage(address, index)?;
         Ok(value)
     }
