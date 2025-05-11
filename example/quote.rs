@@ -1,8 +1,11 @@
+use std::path::Path;
+
 use alloy_primitives::{address, U256};
-use alloy_sol_types::{SolCall, SolValue, sol};
+use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::NodeDB;
+use node_db::RethBackend;
 use revm::context::result::ExecutionResult;
 use revm::primitives::TxKind;
 use revm::{Context, ExecuteEvm, MainBuilder, MainContext};
@@ -27,8 +30,10 @@ async fn main() -> Result<()> {
     let uniswap = address!("7a250d5630B4cF539739dF2C5dAcb4c659F2488D");
 
     // setup the db
-    let database_path: String = std::env::var("DB_PATH").unwrap().parse().unwrap();
-    let mut nodedb = NodeDB::new(database_path).unwrap();
+    let database_path: String = std::env::var("DB_PATH").unwrap();
+    let backend =
+        RethBackend::new(Path::new(database_path.as_str())).expect("failed to open Reth database");
+    let mut nodedb = NodeDB::new(backend);
 
     // construct the calldata for weth->usdc quote
     let out_call = Quote::getAmountsOutCall {

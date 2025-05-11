@@ -7,6 +7,7 @@ use reth_node_ethereum::EthereumNode;
 use reth_provider::{
     providers::StaticFileProvider, BlockNumReader, ProviderFactory, StateProviderBox,
 };
+use reth_provider::{ProviderError, StateProvider};
 use revm::context::DBErrorMarker;
 use revm::database::AccountState;
 use revm::primitives::{Address, B256, KECCAK_EMPTY, U256};
@@ -32,49 +33,43 @@ impl Error for NodeDBError {}
 
 impl DBErrorMarker for NodeDBError {}
 
-// Main structure for the Node Database
-pub struct NodeDB {
-    db_provider: RwLock<StateProviderBox>,
-    provider_factory: ProviderFactory<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>,
+impl From<ProviderError> for NodeDBError {
+    fn from(e: ProviderError) -> Self {
+        NodeDBError(e.to_string())
+    }
+}
+
+pub trait NodeDBBackend: Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
+    fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error>;
+    fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error>;
+    fn block_hash(&self, number: u64) -> Result<B256, Self::Error>;
+}
+
+/// Main structure for the Node Database
+/// It implements the Database trait to provide access to the database
+/// and the DatabaseRef trait to provide read-only access.
+/// It also implements the DatabaseCommit trait to commit changes to the database.
+pub struct NodeDB<B: NodeDBBackend> {
+    backend: Arc<B>,
     accounts: HashMap<Address, NodeDBAccount>,
-    db_block: AtomicU64,
     contracts: HashMap<B256, Bytecode>,
     accessed_slots: RwLock<HashMap<Address, HashSet<U256>>>,
     tracing_enabled: bool,
 }
 
-impl NodeDB {
+impl<B: NodeDBBackend> NodeDB<B> {
     // Constructor for NodeDB
-    pub fn new(db_path: String) -> Result<Self> {
-        // Open the database in read-only mode
-        let db_path = Path::new(&db_path);
-        let db = Arc::new(open_db_read_only(
-            db_path.join("db").as_path(),
-            DatabaseArguments::new(ClientVersion::default()),
-        )?);
-
-        // Create a ProviderFactory
-        let spec = Arc::new(ChainSpecBuilder::mainnet().build());
-        let factory =
-            ProviderFactory::<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>::new(
-                db.clone(),
-                spec.clone(),
-                StaticFileProvider::read_only(db_path.join("static_files"), true)?,
-            );
-
-        // Get latest block number and provider
-        let db_block = factory.last_block_number()?;
-        let db_provider = factory.latest()?;
-
-        Ok(Self {
-            db_provider: RwLock::new(db_provider),
-            provider_factory: factory,
+    pub fn new(backend: B) -> Self {
+        Self {
+            backend: Arc::new(backend),
             accounts: HashMap::new(),
-            db_block: AtomicU64::new(db_block),
             contracts: HashMap::new(),
             accessed_slots: RwLock::new(HashMap::new()),
             tracing_enabled: false,
-        })
+        }
     }
 
     pub fn enable_tracing(&mut self) -> Result<()> {
@@ -85,10 +80,14 @@ impl NodeDB {
         Ok(())
     }
 
+    // This is used to stop tracking the accessed slots after a transaction has been executed
+    // This is useful to avoid memory leaks and unnecessary
     pub fn disable_tracing(&mut self) {
         self.tracing_enabled = false;
     }
 
+    // Get the accessed slots for a given address
+    // This is used for tracing to get the slots that were accessed during a transaction
     pub fn get_accessed_slots(&self, target_address: Address) -> Result<Vec<U256>> {
         let slots = self.accessed_slots.read();
         Ok(slots
@@ -130,7 +129,7 @@ impl NodeDB {
 
         // The account does not exist. Fetch account information from provider and insert account
         // into database
-        let account = self.basic(account_address)?.unwrap();
+        let account = self.backend.basic_account(account_address)?.unwrap();
         self.insert_account_info(account_address, account, insertion_type);
 
         // The account is now in the database, so fetch and insert the storage value
@@ -143,22 +142,17 @@ impl NodeDB {
 
         Ok(())
     }
-
-    // Update the provider to access state from the latest block
-    fn update_provider(&self) -> Result<()> {
-        if let Ok(current_block) = self.provider_factory.last_block_number() {
-            if current_block > self.db_block.load(Ordering::Relaxed) {
-                self.db_block.store(current_block, Ordering::Relaxed);
-                *self.db_provider.write() = self.provider_factory.latest()?;
-            }
-        }
-        Ok(())
-    }
 }
 
-// Implement the Database trait for NodeDB
-impl Database for NodeDB {
-    type Error = NodeDBError;
+/// Implement the Database trait for NodeDB
+/// This allows us to use NodeDB as a database
+/// It is used internally by the NodeDB to fetch data from the chain
+/// Note: It is not used directly by the user
+impl<B: NodeDBBackend> Database for NodeDB<B>
+where
+    B::Error: DBErrorMarker,
+{
+    type Error = B::Error;
 
     fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         // If the account exists and it is custom, we know there is no corresponding on chain state
@@ -194,6 +188,7 @@ impl Database for NodeDB {
             let mut slots = self.accessed_slots.write();
             slots.entry(address).or_default().insert(index);
         }
+
         // Check if the account and the slot exist
         if let Some(account) = self.accounts.get(&address) {
             if let Some(value) = account.storage.get(&index) {
@@ -207,7 +202,7 @@ impl Database for NodeDB {
         }
 
         // Fetch the storage value
-        let value = Self::storage_ref(self, address, index)?;
+        let value = self.backend.storage(address, index)?;
 
         // If the account exists, just update the storage. Otherwise, fetch and create a new
         // account before inserting the storage value
@@ -241,9 +236,15 @@ impl Database for NodeDB {
     }
 }
 
-// Implement the DatabaseRef trait for NodeDB
-impl DatabaseRef for NodeDB {
-    type Error = NodeDBError;
+/// Implement the DatabaseRef trait for NodeDB
+/// This allows us to use NodeDB as a read-only database
+/// It is used internally by the NodeDB to fetch data from the chain
+/// Note: It is not used directly by the user
+impl<B: NodeDBBackend> DatabaseRef for NodeDB<B>
+where
+    B::Error: DBErrorMarker,
+{
+    type Error = B::Error;
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         // If the account exists and it is custom, just return it. Otherwise update from the chain
@@ -253,42 +254,18 @@ impl DatabaseRef for NodeDB {
             }
         }
 
-        // Fetch info
-        self.update_provider()
-            .map_err(|e| NodeDBError(e.to_string()))?;
-
-        let db_provider = self.db_provider.read();
-
-        let account_opt = db_provider
-            .basic_account(&address)
-            .map_err(|e| NodeDBError(e.to_string()))?;
+        let account_opt = self.backend.basic_account(address)?;
 
         let account = match account_opt {
             Some(acc) => acc,
             None => return Ok(None),
         };
 
-        let code = db_provider
-            .account_code(&address)
-            .map_err(|e| NodeDBError(e.to_string()))?;
+        let code = self.backend.account_code(address)?.unwrap_or_default();
 
-        let account_info = if let Some(code) = code {
-            AccountInfo::new(
-                account.balance,
-                account.nonce,
-                code.hash_slow(),
-                Bytecode::new_raw(code.original_bytes()),
-            )
-        } else {
-            AccountInfo::new(
-                account.balance,
-                account.nonce,
-                KECCAK_EMPTY,
-                Bytecode::new(),
-            )
-        };
+        let info = AccountInfo::new(account.balance, account.nonce, code.hash_slow(), code);
 
-        Ok(Some(account_info))
+        Ok(Some(info))
     }
 
     fn code_by_hash_ref(&self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
@@ -296,57 +273,20 @@ impl DatabaseRef for NodeDB {
     }
 
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        // Log slot access if tracing is enabled
-        if self.tracing_enabled {
-            let mut slots = self.accessed_slots.write();
-            slots.entry(address).or_default().insert(index);
-        }
-        // if account exista and slot is custom, just return value
-        if let Some(account) = self.accounts.get(&address) {
-            if let Some(value) = account.storage.get(&index) {
-                if value.insertion_type == InsertionType::Custom {
-                    return Ok(value.value);
-                }
-            }
-        }
-
-        self.update_provider()
-            .map_err(|e| NodeDBError(e.to_string()))?;
-
-        let value = self
-            .db_provider
-            .read()
-            .storage(address, index.into())
-            .map_err(|e| NodeDBError(e.to_string()))?;
-
-        let value = if let Some(storage_val) = value {
-            storage_val
-        } else {
-            U256::ZERO
-        };
-
+        let value = self.backend.storage(address, index)?;
         Ok(value)
     }
 
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        self.update_provider()
-            .map_err(|e| NodeDBError(e.to_string()))?;
-
-        let blockhash = self
-            .db_provider
-            .read()
-            .block_hash(number)
-            .map_err(|e| NodeDBError(e.to_string()))?;
-
-        if let Some(hash) = blockhash {
-            Ok(B256::new(hash.0))
-        } else {
-            Ok(KECCAK_EMPTY)
-        }
+        let hash = self.backend.block_hash(number)?;
+        Ok(hash)
     }
 }
 
-impl DatabaseCommit for NodeDB {
+/// Implement the DatabaseCommit trait for NodeDB
+/// It is used internally by the NodeDB to commit changes to the database
+/// Note: It is not used directly by the user
+impl<B: NodeDBBackend> DatabaseCommit for NodeDB<B> {
     fn commit(&mut self, changes: HashMap<Address, Account, foldhash::fast::RandomState>) {
         for (address, mut account) in changes {
             if !account.is_touched() {
@@ -435,5 +375,135 @@ impl NodeDBAccount {
             storage: HashMap::new(),
             insertion_type,
         }
+    }
+}
+
+/// A backend for read-only access to a Reth database.
+///
+/// Internally it holds:
+/// - a [`ProviderFactory`] to build state providers,  
+/// - a `RwLock<StateProviderBox>` for thread-safe reads,  
+/// - an `AtomicU64` tracking the last synced block.
+///
+/// Designed for use in multithreaded contexts alongside [`NodeDB`].
+pub struct RethBackend {
+    factory: ProviderFactory<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>,
+    provider: RwLock<StateProviderBox>,
+    db_block: AtomicU64,
+}
+
+impl RethBackend {
+    /// Opens the database in read-only mode and builds the initial provider.
+    /// # Arguments
+    /// * `db_path` – directory containing the `db/` subfolder and optional `static_files/`.
+    /// # Errors
+    /// Returns a [`NodeDBError`] if opening the DB or initializing the provider fails.
+    /// # Examples
+    /// ```no_run
+    /// # use std::path::Path;
+    /// # use reth_backend::RethBackend;
+    /// let backend = RethBackend::new(Path::new("/path/to/db"))
+    ///     .expect("failed to open Reth database");
+    /// ```
+    pub fn new(db_path: &Path) -> Result<Self> {
+        let db = Arc::new(open_db_read_only(
+            db_path.join("db").as_path(),
+            DatabaseArguments::new(ClientVersion::default()),
+        )?);
+        let spec = Arc::new(ChainSpecBuilder::mainnet().build());
+        let factory = ProviderFactory::new(
+            db,
+            spec,
+            StaticFileProvider::read_only(db_path.join("static_files"), true)?,
+        );
+        let provider = factory.latest()?;
+        let db_block = factory.last_block_number()?;
+
+        Ok(Self {
+            factory,
+            provider: RwLock::new(provider),
+            db_block: AtomicU64::new(db_block),
+        })
+    }
+
+    /// Checks the latest block number and refreshes the provider if it has advanced.
+    /// This avoids unnecessary rebuilds when no new blocks have been produced.
+    /// # Errors
+    /// Returns a [`NodeDBError`] if querying the block number or fetching the new
+    /// provider fails.
+    fn update_provider(&self) -> Result<()> {
+        if let Ok(current_block) = self.factory.last_block_number() {
+            if current_block > self.db_block.load(Ordering::Relaxed) {
+                self.db_block.store(current_block, Ordering::Relaxed);
+                *self.provider.write() = self.factory.latest()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Implements the [`NodeDBBackend`] trait for the `RethBackend`.
+/// This allows the `RethBackend` to be used as a backend for the `NodeDB`.
+/// The `NodeDBBackend` trait is used to abstract the database access layer.
+impl NodeDBBackend for RethBackend {
+    type Error = NodeDBError;
+
+    /// Get basic account information.
+    ///
+    /// Returns `None` if the account doesn't exist.
+    fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
+        let provider = self.provider.read();
+        let account = provider.basic_account(&address)?;
+        let code = provider.account_code(&address)?;
+
+        let account_info = match account {
+            Some(acc) => AccountInfo::new(
+                acc.balance,
+                acc.nonce,
+                code.as_ref().map_or(KECCAK_EMPTY, |c| c.hash_slow()),
+                code.map_or(Bytecode::new(), |c| Bytecode::new_raw(c.original_bytes())),
+            ),
+            None => return Ok(None),
+        };
+
+        Ok(Some(account_info))
+    }
+
+    /// Get storage of given account.
+    fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
+        let provider = self.provider.read();
+        let value = provider
+            .storage(address, slot.into())?
+            .unwrap_or(U256::ZERO);
+        Ok(value)
+    }
+
+    /// Get the hash of the block with the given number. Returns `None` if no block with this number
+    /// exists.
+    fn block_hash(&self, number: u64) -> Result<B256, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
+        let provider = self.provider.read();
+        let hash = provider
+            .block_hash(number)?
+            .unwrap_or_else(|| KECCAK_EMPTY.into());
+        Ok(B256::new(hash.0))
+    }
+
+    /// Get the code of the account at the given address.
+    /// Returns `None` if the account doesn't exist or has no code.
+    fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+        let provider = self.provider.read();
+        let account_code = provider.account_code(&address)?;
+        Ok(account_code.map(|code| Bytecode::new_raw(code.original_bytes())))
     }
 }
