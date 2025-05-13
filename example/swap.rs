@@ -1,7 +1,10 @@
+use std::path::Path;
+
 use alloy_primitives::{address, U256};
 use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
+use node_db::RethBackend;
 use node_db::{InsertionType, NodeDB};
 use revm::context::result::ExecutionResult;
 use revm::primitives::{keccak256, TxKind};
@@ -38,8 +41,10 @@ async fn main() -> Result<()> {
     let usdc = address!("A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
 
     // construct the database
-    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
-    let mut nodedb = NodeDB::new(database_path).unwrap();
+    let database_path: String = std::env::var("DB_PATH").unwrap();
+    let backend =
+        RethBackend::new(Path::new(database_path.as_str())).expect("failed to open Reth database");
+    let mut nodedb = NodeDB::new(backend);
 
     // give our account some weth
     let balance_slot = keccak256((account, U256::from(3)).abi_encode());

@@ -1,12 +1,15 @@
+use std::path::Path;
+
 use alloy_primitives::{address, U256};
-use alloy_sol_types::{SolCall, SolValue, sol};
+use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
+use node_db::RethBackend;
 use node_db::{InsertionType, NodeDB};
 use revm::context::result::ExecutionResult;
 use revm::primitives::TxKind;
 use revm::state::{AccountInfo, Bytecode};
-use revm::{Context, ExecuteEvm, MainBuilder, MainContext, ExecuteCommitEvm};
+use revm::{Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext};
 
 // Generate contract bindings
 sol!(Counter, "example/counter.json");
@@ -18,8 +21,10 @@ async fn main() -> Result<()> {
     let caller = address!("0000000000000000000000000000000000000001");
 
     // construct the database
-    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
-    let mut nodedb = NodeDB::new(database_path).unwrap();
+    let database_path: String = std::env::var("DB_PATH").unwrap();
+    let backend =
+        RethBackend::new(Path::new(database_path.as_str())).expect("failed to open Reth database");
+    let mut nodedb = NodeDB::new(backend);
 
     // insert contract account
     let counter_bytecode = Bytecode::new_raw(Counter::DEPLOYED_BYTECODE.clone());

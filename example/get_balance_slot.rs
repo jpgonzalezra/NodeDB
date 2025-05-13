@@ -1,10 +1,12 @@
+use std::path::Path;
 use std::time::Instant;
 
 use alloy_primitives::{address, U256};
-use alloy_sol_types::{SolCall, SolValue, sol};
+use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::NodeDB;
+use node_db::RethBackend;
 use revm::context::result::ExecutionResult;
 use revm::primitives::{Address, TxKind};
 use revm::{Context, DatabaseRef, ExecuteEvm, MainBuilder, MainContext};
@@ -25,8 +27,10 @@ async fn main() -> Result<()> {
     let weth = address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
 
     // construct the database
-    let database_path = std::env::var("DB_PATH").unwrap().parse().unwrap();
-    let mut nodedb = NodeDB::new(database_path).unwrap();
+    let database_path: String = std::env::var("DB_PATH").unwrap();
+    let backend =
+        RethBackend::new(Path::new(database_path.as_str())).expect("failed to open Reth database");
+    let mut nodedb = NodeDB::<RethBackend>::new(backend);
 
     let start = Instant::now();
     let balance_slot = get_balance_slot(&mut nodedb, weth, account)?;
@@ -40,7 +44,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn get_balance_slot(nodedb: &mut NodeDB, token: Address, account: Address) -> Result<U256> {
+fn get_balance_slot(
+    nodedb: &mut NodeDB<RethBackend>,
+    token: Address,
+    account: Address,
+) -> Result<U256> {
     nodedb.enable_tracing()?;
 
     let balanceof_calldata = WETH::balanceOfCall { account }.abi_encode();
