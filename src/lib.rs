@@ -507,7 +507,7 @@ impl NodeDBBackend for RethBackend {
         let provider = self.provider.read();
         let hash = provider
             .block_hash(number)?
-            .unwrap_or_else(|| KECCAK_EMPTY.into());
+            .unwrap_or(KECCAK_EMPTY);
         Ok(B256::new(hash.0))
     }
 
