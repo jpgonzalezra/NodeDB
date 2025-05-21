@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
         ExecutionResult::Success { output, .. } => output,
         result => return Err(anyhow!("'swap' execution failed: {result:?}")),
     };
-    let decoded_output = <U256>::abi_decode(output.data(), false).unwrap();
+    let decoded_output = <U256>::abi_decode(output.data()).unwrap();
     println!("Counter after increment = {}", decoded_output);
 
     Ok(())

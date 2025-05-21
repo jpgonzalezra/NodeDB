@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
         ExecutionResult::Success { output, .. } => output,
         result => return Err(anyhow!("'swap' execution failed: {result:?}")),
     };
-    let decoded_outputs = <Vec<U256>>::abi_decode(output.data(), false).unwrap();
+    let decoded_outputs = <Vec<U256>>::abi_decode(output.data()).unwrap();
     println!("1 WETH equals {} USDC", decoded_outputs.get(1).unwrap());
 
     Ok(())

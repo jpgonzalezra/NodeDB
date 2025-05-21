@@ -31,15 +31,15 @@ path = "example/get_balance_slot.rs"
 anyhow = "1.0.97"
 eyre = "0.6.12"
 
-reth-db= { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
-reth-node-api= { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
-reth-provider= { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
-reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.8", default-features = false }
+reth-db = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.12", default-features = false }
+reth-node-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.12", default-features = false }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.12", default-features = false }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.12", default-features = false }
+reth-node-ethereum = { git = "https://github.com/paradigmxyz/reth", tag = "v1.3.12", default-features = false }
 
-alloy-primitives = "0.8.25"
-alloy-sol-types = { version = "0.8.25", features = ["json"] }
-alloy-contract = "0.13.0"
+alloy-primitives = "1.1.2"
+alloy-sol-types = { version = "1.1.2", features = ["json"] }
+alloy-contract = "1.0.6"
 
 
 parking_lot = "0.12.3"
@@ -48,5 +48,5 @@ futures = "0.3.31"
 dotenv = "0.15.0"
 env_logger = "0.11.8"
 log = "0.4.27"
-revm = { version = "21.0.0", features = ["alloydb"] }
+revm = { version = "22.0.1", features = ["alloydb"] }
 foldhash = "0.1.5"

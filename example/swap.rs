@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
         result => return Err(anyhow!("'swap' execution failed: {result:?}")),
     };
 
-    let decoded_outputs = <Vec<U256>>::abi_decode(output.data(), false).unwrap();
+    let decoded_outputs = <Vec<U256>>::abi_decode(output.data()).unwrap();
     println!(
         "Swapped 1 WETH for {} USDC",
         decoded_outputs.get(1).unwrap()
