@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
         result => return Err(anyhow!("'swap' execution failed: {result:?}")),
     };
 
-    let allowance = <U256>::abi_decode(output.data(), false).unwrap();
+    let allowance = <U256>::abi_decode(output.data()).unwrap();
     println!("The router is allowed to spend {:?} weth", allowance);
 
     Ok(())

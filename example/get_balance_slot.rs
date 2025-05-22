@@ -63,7 +63,7 @@ fn get_balance_slot(
     let ref_tx = evm.replay()?;
 
     let balance = match ref_tx.result {
-        ExecutionResult::Success { output, .. } => U256::abi_decode(output.data(), false)?,
+        ExecutionResult::Success { output, .. } => U256::abi_decode(output.data())?,
         result => return Err(anyhow!("balanceOf failed: {result:?}")),
     };
 

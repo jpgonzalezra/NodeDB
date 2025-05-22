@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
         result => return Err(anyhow!("'swap' execution failed: {result:?}")),
     };
 
-    let balance = <U256>::abi_decode(output.data(), false).unwrap();
+    let balance = <U256>::abi_decode(output.data()).unwrap();
     println!("Account has custom balance {:?}", balance);
     Ok(())
 }
