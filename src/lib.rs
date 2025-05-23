@@ -1,3 +1,6 @@
+use alloy_primitives::{StorageValue, Uint};
+use async_trait::async_trait;
+use core::future::Future;
 use eyre::Result;
 use parking_lot::RwLock;
 use reth_chainspec::ChainSpecBuilder;
@@ -9,7 +12,8 @@ use reth_provider::{
 };
 use reth_provider::{ProviderError, StateProvider};
 use revm::context::DBErrorMarker;
-use revm::database::AccountState;
+use revm::database::async_db::DatabaseAsyncRef;
+use revm::database::{AccountState, DatabaseAsync};
 use revm::primitives::{Address, B256, KECCAK_EMPTY, U256};
 use revm::state::{Account, AccountInfo, Bytecode};
 use revm::{Database, DatabaseCommit, DatabaseRef};
@@ -19,6 +23,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::runtime::{Handle, Runtime};
 
 #[derive(Debug)]
 pub struct NodeDBError(pub String);
@@ -39,13 +44,14 @@ impl From<ProviderError> for NodeDBError {
     }
 }
 
+#[async_trait]
 pub trait NodeDBBackend: Send + Sync {
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: std::error::Error + Send + Sync + 'static + From<NodeDBError>;
 
-    fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
-    fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error>;
-    fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error>;
-    fn block_hash(&self, number: u64) -> Result<B256, Self::Error>;
+    async fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
+    async fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error>;
+    async fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error>;
+    async fn block_hash(&self, number: u64) -> Result<B256, Self::Error>;
 }
 
 /// Main structure for the Node Database
@@ -109,7 +115,7 @@ impl<B: NodeDBBackend> NodeDB<B> {
     }
 
     // Insert storage info into the database.
-    pub fn insert_account_storage(
+    pub async fn insert_account_storage(
         &mut self,
         account_address: Address,
         slot: U256,
@@ -129,7 +135,7 @@ impl<B: NodeDBBackend> NodeDB<B> {
 
         // The account does not exist. Fetch account information from provider and insert account
         // into database
-        let account = self.backend.basic_account(account_address)?.unwrap();
+        let account = self.backend.basic_account(account_address).await?.unwrap();
         self.insert_account_info(account_address, account, insertion_type);
 
         // The account is now in the database, so fetch and insert the storage value
@@ -148,91 +154,151 @@ impl<B: NodeDBBackend> NodeDB<B> {
 /// This allows us to use NodeDB as a database
 /// It is used internally by the NodeDB to fetch data from the chain
 /// Note: It is not used directly by the user
-impl<B: NodeDBBackend> Database for NodeDB<B>
+impl<B: NodeDBBackend> DatabaseAsync for NodeDB<B>
 where
-    B::Error: DBErrorMarker,
+    B::Error: DBErrorMarker + From<NodeDBError>,
 {
     type Error = B::Error;
 
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        // If the account exists and it is custom, we know there is no corresponding on chain state
-        if let Some(account) = self.accounts.get(&address) {
-            if account.insertion_type == InsertionType::Custom {
-                return Ok(Some(account.info.clone()));
-            }
-        }
-
-        // Fetch the account from the chain
-        let account_info_opt = Self::basic_ref(self, address)?;
-
-        let account_info = match account_info_opt {
-            Some(info) => info,
-            None => return Ok(None),
-        };
-
-        match self.accounts.get_mut(&address) {
-            Some(account) => account.info = account_info.clone(),
-            None => self.insert_account_info(address, account_info.clone(), InsertionType::OnChain),
-        }
-
-        Ok(Some(account_info))
-    }
-
-    fn code_by_hash(&mut self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
-        panic!("This should not be called, as the code is already loaded");
-    }
-
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        // Log slot access if tracing is enabled
-        if self.tracing_enabled {
-            let mut slots = self.accessed_slots.write();
-            slots.entry(address).or_default().insert(index);
-        }
-
-        // Check if the account and the slot exist
-        if let Some(account) = self.accounts.get(&address) {
-            if let Some(value) = account.storage.get(&index) {
-                // The slot is in storage. If it is custom, there is no corresponding onchain state
-                // to update it with, just return the value
-                if value.insertion_type == InsertionType::Custom {
-                    return Ok(value.value);
+    fn basic_async(
+        &mut self,
+        address: Address,
+    ) -> impl Future<Output = Result<Option<AccountInfo>, Self::Error>> + Send {
+        async move {
+            // If the account exists and it is custom, we know there is no corresponding on chain state
+            if let Some(account) = self.accounts.get(&address) {
+                if account.insertion_type == InsertionType::Custom {
+                    return Ok(Some(account.info.clone()));
                 }
-                // The account exists and the slot is onchain, continue on so it is fetched and updated
             }
-        }
 
-        // Fetch the storage value
-        let value = self.backend.storage(address, index)?;
+            // Fetch the account from the chain
+            let account_info_opt = self.basic_async_ref(address).await?;
 
-        // If the account exists, just update the storage. Otherwise, fetch and create a new
-        // account before inserting the storage value
-        match self.accounts.get_mut(&address) {
-            Some(account) => {
-                account.storage.insert(
-                    index,
-                    NodeDBSlot {
-                        value,
-                        insertion_type: InsertionType::OnChain,
-                    },
-                );
+            let account_info = match account_info_opt {
+                Some(info) => info,
+                None => return Ok(None),
+            };
+
+            match self.accounts.get_mut(&address) {
+                Some(account) => account.info = account_info.clone(),
+                None => {
+                    self.insert_account_info(address, account_info.clone(), InsertionType::OnChain)
+                }
             }
-            None => {
-                let _ = Self::basic(self, address)?;
-                let account = self.accounts.get_mut(&address).unwrap();
-                account.storage.insert(
-                    index,
-                    NodeDBSlot {
-                        value,
-                        insertion_type: InsertionType::OnChain,
-                    },
-                );
-            }
+
+            Ok(Some(account_info))
         }
-        Ok(value)
     }
 
-    fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
-        Self::block_hash_ref(self, number)
+    fn code_by_hash_async(
+        &mut self,
+        _code_hash: B256,
+    ) -> impl Future<Output = Result<Bytecode, Self::Error>> + Send {
+        async move {
+            Err(Self::Error::from(NodeDBError(
+                "This should not be called, as the code is already loaded".to_string(),
+            )))
+        }
+    }
+
+    fn storage_async(
+        &mut self,
+        address: Address,
+        index: U256,
+    ) -> impl Future<Output = Result<U256, Self::Error>> + Send {
+        async move {
+            // Log slot access if tracing is enabled
+            if self.tracing_enabled {
+                let mut slots = self.accessed_slots.write();
+                slots.entry(address).or_default().insert(index);
+            }
+
+            // Check if the account and the slot exist
+            if let Some(account) = self.accounts.get(&address) {
+                if let Some(value) = account.storage.get(&index) {
+                    // The slot is in storage. If it is custom, there is no corresponding onchain state
+                    // to update it with, just return the value
+                    if value.insertion_type == InsertionType::Custom {
+                        return Ok(value.value);
+                    }
+                    // The account exists and the slot is onchain, continue on so it is fetched and updated
+                }
+            }
+
+            // Fetch the storage value
+            let value = self.backend.storage(address, index).await?;
+
+            // If the account exists, just update the storage. Otherwise, fetch and create a new
+            // account before inserting the storage value
+            match self.accounts.get_mut(&address) {
+                Some(account) => {
+                    account.storage.insert(
+                        index,
+                        NodeDBSlot {
+                            value,
+                            insertion_type: InsertionType::OnChain,
+                        },
+                    );
+                }
+                None => {
+                    let _ = Self::basic_async(self, address).await?;
+                    let account = self.accounts.get_mut(&address).unwrap();
+                    account.storage.insert(
+                        index,
+                        NodeDBSlot {
+                            value,
+                            insertion_type: InsertionType::OnChain,
+                        },
+                    );
+                }
+            }
+            Ok(value)
+        }
+    }
+
+    fn block_hash_async(
+        &mut self,
+        number: u64,
+    ) -> impl Future<Output = Result<B256, <B as NodeDBBackend>::Error>> + Send {
+        Self::block_hash_async_ref(self, number)
+    }
+}
+
+impl<B> DatabaseAsync for &mut NodeDB<B>
+where
+    B: NodeDBBackend,
+    B::Error: DBErrorMarker + std::error::Error,
+{
+    type Error = B::Error;
+
+    fn basic_async(
+        &mut self,
+        address: Address,
+    ) -> impl Future<Output = Result<Option<AccountInfo>, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsync>::basic_async(self, address)
+    }
+
+    fn code_by_hash_async(
+        &mut self,
+        code_hash: B256,
+    ) -> impl Future<Output = Result<Bytecode, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsync>::code_by_hash_async(self, code_hash)
+    }
+
+    fn storage_async(
+        &mut self,
+        address: Address,
+        index: U256,
+    ) -> impl Future<Output = Result<StorageValue, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsync>::storage_async(self, address, index)
+    }
+
+    fn block_hash_async(
+        &mut self,
+        number: u64,
+    ) -> impl Future<Output = Result<B256, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsync>::block_hash_async(self, number)
     }
 }
 
@@ -240,60 +306,124 @@ where
 /// This allows us to use NodeDB as a read-only database
 /// It is used internally by the NodeDB to fetch data from the chain
 /// Note: It is not used directly by the user
-impl<B: NodeDBBackend> DatabaseRef for NodeDB<B>
+impl<B: NodeDBBackend> DatabaseAsyncRef for NodeDB<B>
 where
-    B::Error: DBErrorMarker,
+    B::Error: DBErrorMarker + From<NodeDBError>,
 {
     type Error = B::Error;
 
-    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        // If the account exists and it is custom, just return it. Otherwise update from the chain
-        if let Some(account) = self.accounts.get(&address) {
-            if account.insertion_type == InsertionType::Custom {
-                return Ok(Some(account.info.clone()));
-            }
-        }
-
-        let account_opt = self.backend.basic_account(address)?;
-
-        let account = match account_opt {
-            Some(acc) => acc,
-            None => return Ok(None),
-        };
-
-        let code = self.backend.account_code(address)?.unwrap_or_default();
-
-        let info = AccountInfo::new(account.balance, account.nonce, code.hash_slow(), code);
-
-        Ok(Some(info))
-    }
-
-    fn code_by_hash_ref(&self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
-        panic!("This should not be called, as the code is already loaded");
-    }
-
-    fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        // Log slot access if tracing is enabled
-        if self.tracing_enabled {
-            let mut slots = self.accessed_slots.write();
-            slots.entry(address).or_default().insert(index);
-        }
-
-        // Check if the account and the slot exist locally with custom insertion
-        if let Some(account) = self.accounts.get(&address) {
-            if let Some(value) = account.storage.get(&index) {
-                if value.insertion_type == InsertionType::Custom {
-                    return Ok(value.value);
+    fn basic_async_ref(
+        &self,
+        address: Address,
+    ) -> impl Future<Output = Result<Option<AccountInfo>, Self::Error>> + Send {
+        async move {
+            // If the account exists and it is custom, just return it. Otherwise update from the chain
+            if let Some(account) = self.accounts.get(&address) {
+                if account.insertion_type == InsertionType::Custom {
+                    return Ok(Some(account.info.clone()));
                 }
             }
+
+            let account_opt = self.backend.basic_account(address).await?;
+
+            let account = match account_opt {
+                Some(acc) => acc,
+                None => return Ok(None),
+            };
+
+            let code = self
+                .backend
+                .account_code(address)
+                .await?
+                .unwrap_or_default();
+
+            let info = AccountInfo::new(account.balance, account.nonce, code.hash_slow(), code);
+
+            Ok(Some(info))
         }
-        let value = self.backend.storage(address, index)?;
-        Ok(value)
     }
 
-    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        let hash = self.backend.block_hash(number)?;
-        Ok(hash)
+    fn code_by_hash_async_ref(
+        &self,
+        _code_hash: B256,
+    ) -> impl Future<Output = Result<Bytecode, Self::Error>> + Send {
+        async move {
+            Err(Self::Error::from(NodeDBError(
+                "This should not be called, as the code is already loaded".to_string(),
+            )))
+        }
+    }
+
+    fn storage_async_ref(
+        &self,
+        address: Address,
+        index: U256,
+    ) -> impl Future<Output = Result<U256, Self::Error>> + Send {
+        // Log slot access if tracing is enabled
+        async move {
+            if self.tracing_enabled {
+                let mut slots = self.accessed_slots.write();
+                slots.entry(address).or_default().insert(index);
+            }
+
+            // Check if the account and the slot exist locally with custom insertion
+            if let Some(account) = self.accounts.get(&address) {
+                if let Some(value) = account.storage.get(&index) {
+                    if value.insertion_type == InsertionType::Custom {
+                        return Ok(value.value);
+                    }
+                }
+            }
+            let value = self.backend.storage(address, index).await?;
+            Ok(value)
+        }
+    }
+
+    fn block_hash_async_ref(
+        &self,
+        number: u64,
+    ) -> impl Future<Output = Result<B256, <B as NodeDBBackend>::Error>> + Send {
+        async move {
+            let hash = self.backend.block_hash(number).await?;
+            Ok(hash)
+        }
+    }
+}
+
+impl<B> DatabaseAsyncRef for &mut NodeDB<B>
+where
+    B: NodeDBBackend,
+    B::Error: DBErrorMarker + std::error::Error,
+{
+    type Error = B::Error;
+
+    fn basic_async_ref(
+        &self,
+        address: Address,
+    ) -> impl Future<Output = Result<Option<AccountInfo>, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsyncRef>::basic_async_ref(self, address)
+    }
+
+    fn code_by_hash_async_ref(
+        &self,
+        code_hash: B256,
+    ) -> impl Future<Output = Result<Bytecode, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsyncRef>::code_by_hash_async_ref(self, code_hash)
+    }
+
+    fn storage_async_ref(
+        &self,
+        address: Address,
+        index: U256,
+    ) -> impl Future<Output = Result<StorageValue, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsyncRef>::storage_async_ref(self, address, index)
+    }
+
+    fn block_hash_async_ref(
+        &self,
+        number: u64,
+    ) -> impl Future<Output = Result<B256, Self::Error>> + Send {
+        <NodeDB<B> as DatabaseAsyncRef>::block_hash_async_ref(self, number)
     }
 }
 
@@ -459,13 +589,14 @@ impl RethBackend {
 /// Implements the [`NodeDBBackend`] trait for the `RethBackend`.
 /// This allows the `RethBackend` to be used as a backend for the `NodeDB`.
 /// The `NodeDBBackend` trait is used to abstract the database access layer.
+#[async_trait]
 impl NodeDBBackend for RethBackend {
     type Error = NodeDBError;
 
     /// Get basic account information.
     ///
     /// Returns `None` if the account doesn't exist.
-    fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    async fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         self.update_provider()
             .map_err(|e| NodeDBError(e.to_string()))?;
 
@@ -487,7 +618,7 @@ impl NodeDBBackend for RethBackend {
     }
 
     /// Get storage of given account.
-    fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+    async fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
         self.update_provider()
             .map_err(|e| NodeDBError(e.to_string()))?;
 
@@ -500,24 +631,126 @@ impl NodeDBBackend for RethBackend {
 
     /// Get the hash of the block with the given number. Returns `None` if no block with this number
     /// exists.
-    fn block_hash(&self, number: u64) -> Result<B256, Self::Error> {
+    async fn block_hash(&self, number: u64) -> Result<B256, Self::Error> {
         self.update_provider()
             .map_err(|e| NodeDBError(e.to_string()))?;
 
         let provider = self.provider.read();
-        let hash = provider
-            .block_hash(number)?
-            .unwrap_or(KECCAK_EMPTY);
+        let hash = provider.block_hash(number)?.unwrap_or(KECCAK_EMPTY);
         Ok(B256::new(hash.0))
     }
 
     /// Get the code of the account at the given address.
     /// Returns `None` if the account doesn't exist or has no code.
-    fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error> {
+    async fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error> {
         self.update_provider()
             .map_err(|e| NodeDBError(e.to_string()))?;
         let provider = self.provider.read();
         let account_code = provider.account_code(&address)?;
         Ok(account_code.map(|code| Bytecode::new_raw(code.original_bytes())))
+    }
+}
+
+#[derive(Debug)]
+pub struct NodeDBAsync<T> {
+    inner: T,
+    rt: HandleOrRuntime,
+}
+
+#[derive(Debug)]
+enum HandleOrRuntime {
+    Handle(Handle),
+    Runtime(Runtime),
+}
+
+impl HandleOrRuntime {
+    fn block_on<F>(&self, fut: F) -> F::Output
+    where
+        F: Future + Send,
+        F::Output: Send,
+    {
+        match self {
+            HandleOrRuntime::Handle(h) => tokio::task::block_in_place(|| h.block_on(fut)),
+            HandleOrRuntime::Runtime(rt) => rt.block_on(fut),
+        }
+    }
+}
+
+impl<T> NodeDBAsync<T>
+where
+    T: DatabaseAsync + DatabaseAsyncRef,
+{
+    pub fn new(inner: T) -> Option<Self> {
+        let rt = Handle::try_current().ok().and_then(|h| {
+            if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread {
+                None
+            } else {
+                Some(HandleOrRuntime::Handle(h))
+            }
+        })?;
+        Some(Self { inner, rt })
+    }
+
+    pub fn with_runtime(inner: T, rt: Runtime) -> Self {
+        Self {
+            inner,
+            rt: HandleOrRuntime::Runtime(rt),
+        }
+    }
+
+    pub fn with_handle(inner: T, h: Handle) -> Self {
+        Self {
+            inner,
+            rt: HandleOrRuntime::Handle(h),
+        }
+    }
+}
+
+impl<T> Database for NodeDBAsync<T>
+where
+    T: DatabaseAsync,
+{
+    type Error = T::Error;
+
+    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.rt.block_on(self.inner.basic_async(address))
+    }
+    fn code_by_hash(&mut self, hash: B256) -> Result<Bytecode, Self::Error> {
+        self.rt.block_on(self.inner.code_by_hash_async(hash))
+    }
+    fn storage(&mut self, addr: Address, idx: Uint<256, 4>) -> Result<StorageValue, Self::Error> {
+        self.rt.block_on(self.inner.storage_async(addr, idx))
+    }
+    fn block_hash(&mut self, n: u64) -> Result<B256, Self::Error> {
+        self.rt.block_on(self.inner.block_hash_async(n))
+    }
+}
+
+impl<T> DatabaseRef for NodeDBAsync<T>
+where
+    T: DatabaseAsyncRef,
+{
+    type Error = T::Error;
+
+    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.rt.block_on(self.inner.basic_async_ref(address))
+    }
+    fn code_by_hash_ref(&self, hash: B256) -> Result<Bytecode, Self::Error> {
+        self.rt.block_on(self.inner.code_by_hash_async_ref(hash))
+    }
+    fn storage_ref(&self, addr: Address, idx: Uint<256, 4>) -> Result<StorageValue, Self::Error> {
+        self.rt.block_on(self.inner.storage_async_ref(addr, idx))
+    }
+    fn block_hash_ref(&self, n: u64) -> Result<B256, Self::Error> {
+        self.rt.block_on(self.inner.block_hash_async_ref(n))
+    }
+}
+
+impl<T> DatabaseCommit for NodeDBAsync<T>
+where
+    T: DatabaseCommit,
+{
+    fn commit(&mut self, changes: HashMap<Address, Account, foldhash::fast::RandomState>) {
+        self.inner.commit(changes)
     }
 }
