@@ -5,7 +5,6 @@ use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::NodeDB;
-use node_db::NodeDBAsync;
 use node_db::RethBackend;
 use revm::context::result::ExecutionResult;
 use revm::primitives::TxKind;
@@ -43,10 +42,9 @@ async fn main() -> Result<()> {
     }
     .abi_encode();
 
-    let mut nodedb_async = NodeDBAsync::new(nodedb).unwrap();
     // create evm instance and transact
     let mut evm = Context::mainnet()
-        .with_db(&mut nodedb_async)
+        .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = vitalik;
             tx.value = U256::ZERO;

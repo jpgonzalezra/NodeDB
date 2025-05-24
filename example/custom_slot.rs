@@ -4,7 +4,6 @@ use alloy_primitives::{address, U256};
 use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
-use node_db::NodeDBAsync;
 use node_db::NodeDBStorageSync;
 use node_db::RethBackend;
 use node_db::{InsertionType, NodeDB};
@@ -44,10 +43,9 @@ async fn main() -> Result<()> {
     // setup our balance_of calldata
     let balance_calldata = ERC20Token::balanceOfCall { account }.abi_encode();
 
-    let mut nodedb_async = NodeDBAsync::new(nodedb).unwrap();
     // construct a new evm instance
     let mut evm = Context::mainnet()
-        .with_db(&mut nodedb_async)
+        .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = account;
             tx.value = U256::ZERO;

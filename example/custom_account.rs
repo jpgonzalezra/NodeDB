@@ -4,7 +4,6 @@ use alloy_primitives::{address, U256};
 use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
-use node_db::NodeDBAsync;
 use node_db::RethBackend;
 use node_db::{InsertionType, NodeDB};
 use revm::context::result::ExecutionResult;
@@ -41,9 +40,8 @@ async fn main() -> Result<()> {
     let increment_calldata = Counter::incrementCall {}.abi_encode();
 
     // construct the evm instance
-    let mut nodedb_async = NodeDBAsync::new(nodedb).unwrap();
     let mut evm = Context::mainnet()
-        .with_db(&mut nodedb_async)
+        .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = caller;
             tx.kind = TxKind::Call(counter_address);
@@ -57,7 +55,7 @@ async fn main() -> Result<()> {
 
     let getcount_calldata = Counter::getCountCall {}.abi_encode();
     let mut evm = Context::mainnet()
-        .with_db(&mut nodedb_async)
+        .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = caller;
             tx.kind = TxKind::Call(counter_address);
