@@ -234,7 +234,7 @@ where
         Ok(())
     }
 }
-/// Implement the Database trait for NodeDB
+/// Implement the DatabaseAsync trait for NodeDB
 /// This allows us to use NodeDB as a database
 /// It is used internally by the NodeDB to fetch data from the chain
 /// Note: It is not used directly by the user
@@ -394,19 +394,84 @@ where
     type Error = B::Error;
 
     fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        self.backend.basic_account(address)
+        // If the account exists and it is custom, we know there is no corresponding on chain state
+        if let Some(account) = self.accounts.get(&address) {
+            if account.insertion_type == InsertionType::Custom {
+                return Ok(Some(account.info.clone()));
+            }
+        }
+
+        // Fetch the account from the chain
+        let account_info_opt = self.basic_ref(address)?;
+
+        let account_info = match account_info_opt {
+            Some(info) => info,
+            None => return Ok(None),
+        };
+
+        match self.accounts.get_mut(&address) {
+            Some(account) => account.info = account_info.clone(),
+            None => self.insert_account_info(address, account_info.clone(), InsertionType::OnChain),
+        }
+
+        Ok(Some(account_info))
     }
 
     fn code_by_hash(&mut self, _hash: B256) -> Result<Bytecode, Self::Error> {
         Err(NodeDBError("This should not be called, as the code is already loaded".into()).into())
     }
 
-    fn storage(&mut self, address: Address, slot: U256) -> Result<U256, Self::Error> {
-        self.backend.storage(address, slot)
+    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        // Log slot access if tracing is enabled
+        if self.tracing_enabled {
+            let mut slots = self.accessed_slots.write();
+            slots.entry(address).or_default().insert(index);
+        }
+
+        // Check if the account and the slot exist
+        if let Some(account) = self.accounts.get(&address) {
+            if let Some(value) = account.storage.get(&index) {
+                // The slot is in storage. If it is custom, there is no corresponding onchain state
+                // to update it with, just return the value
+                if value.insertion_type == InsertionType::Custom {
+                    return Ok(value.value);
+                }
+                // The account exists and the slot is onchain, continue on so it is fetched and updated
+            }
+        }
+
+        // Fetch the storage value
+        let value = self.backend.storage(address, index)?;
+
+        // If the account exists, just update the storage. Otherwise, fetch and create a new
+        // account before inserting the storage value
+        match self.accounts.get_mut(&address) {
+            Some(account) => {
+                account.storage.insert(
+                    index,
+                    NodeDBSlot {
+                        value,
+                        insertion_type: InsertionType::OnChain,
+                    },
+                );
+            }
+            None => {
+                let _ = Self::basic(self, address)?;
+                let account = self.accounts.get_mut(&address).unwrap();
+                account.storage.insert(
+                    index,
+                    NodeDBSlot {
+                        value,
+                        insertion_type: InsertionType::OnChain,
+                    },
+                );
+            }
+        }
+        Ok(value)
     }
 
     fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
-        self.backend.block_hash(number)
+        self.block_hash_ref(number)
     }
 }
 
@@ -418,15 +483,47 @@ where
     type Error = B::Error;
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        self.backend.basic_account(address)
+        // If the account exists and it is custom, just return it. Otherwise update from the chain
+        if let Some(account) = self.accounts.get(&address) {
+            if account.insertion_type == InsertionType::Custom {
+                return Ok(Some(account.info.clone()));
+            }
+        }
+
+        let account_opt = self.backend.basic_account(address)?;
+
+        let account = match account_opt {
+            Some(acc) => acc,
+            None => return Ok(None),
+        };
+
+        let code = self.backend.account_code(address)?.unwrap_or_default();
+
+        let info = AccountInfo::new(account.balance, account.nonce, code.hash_slow(), code);
+
+        Ok(Some(info))
     }
 
     fn code_by_hash_ref(&self, _hash: B256) -> Result<Bytecode, Self::Error> {
         Err(NodeDBError("This should not be called, as the code is already loaded".into()).into())
     }
 
-    fn storage_ref(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
-        self.backend.storage(address, slot)
+    fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        if self.tracing_enabled {
+            let mut slots = self.accessed_slots.write();
+            slots.entry(address).or_default().insert(index);
+        }
+
+        // Check if the account and the slot exist locally with custom insertion
+        if let Some(account) = self.accounts.get(&address) {
+            if let Some(value) = account.storage.get(&index) {
+                if value.insertion_type == InsertionType::Custom {
+                    return Ok(value.value);
+                }
+            }
+        }
+        let value = self.backend.storage(address, index)?;
+        Ok(value)
     }
 
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
