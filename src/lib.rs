@@ -44,8 +44,18 @@ impl From<ProviderError> for NodeDBError {
     }
 }
 
+/// Synchronous backend trait
+pub trait NodeDBBackendSync: Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static + DBErrorMarker;
+
+    fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
+    fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error>;
+    fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error>;
+    fn block_hash(&self, number: u64) -> Result<B256, Self::Error>;
+}
+
 #[async_trait]
-pub trait NodeDBBackend: Send + Sync {
+pub trait NodeDBBackendAsync: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static + From<NodeDBError>;
 
     async fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
@@ -58,7 +68,7 @@ pub trait NodeDBBackend: Send + Sync {
 /// It implements the Database trait to provide access to the database
 /// and the DatabaseRef trait to provide read-only access.
 /// It also implements the DatabaseCommit trait to commit changes to the database.
-pub struct NodeDB<B: NodeDBBackend> {
+pub struct NodeDB<B> {
     backend: Arc<B>,
     accounts: HashMap<Address, NodeDBAccount>,
     contracts: HashMap<B256, Bytecode>,
@@ -66,7 +76,7 @@ pub struct NodeDB<B: NodeDBBackend> {
     tracing_enabled: bool,
 }
 
-impl<B: NodeDBBackend> NodeDB<B> {
+impl<B> NodeDB<B> {
     // Constructor for NodeDB
     pub fn new(backend: B) -> Self {
         Self {
@@ -113,15 +123,90 @@ impl<B: NodeDBBackend> NodeDB<B> {
         new_account.info = account_info;
         self.accounts.insert(account_address, new_account);
     }
+}
 
-    // Insert storage info into the database.
-    pub async fn insert_account_storage(
+pub trait NodeDBStorageSync {
+    type Error;
+    fn insert_account_storage(
         &mut self,
         account_address: Address,
         slot: U256,
         value: U256,
         insertion_type: InsertionType,
-    ) -> Result<()> {
+    ) -> Result<(), Self::Error>;
+}
+
+#[async_trait]
+impl<B: NodeDBBackendSync> NodeDBStorageSync for NodeDB<B>
+where
+    B: NodeDBBackendSync,
+    B::Error: From<NodeDBError>,
+{
+    type Error = B::Error;
+
+    // Insert storage info into the database.
+    fn insert_account_storage(
+        &mut self,
+        account_address: Address,
+        slot: U256,
+        value: U256,
+        insertion_type: InsertionType,
+    ) -> Result<(), Self::Error> {
+        // If this account already exists, just update the storage slot
+        if let Some(account) = self.accounts.get_mut(&account_address) {
+            // slot value is marked as custom since this is a custom insertion
+            let slot_value = NodeDBSlot {
+                value,
+                insertion_type: InsertionType::Custom,
+            };
+            account.storage.insert(slot, slot_value);
+            return Ok(());
+        }
+
+        // The account does not exist. Fetch account information from provider and insert account
+        // into database
+        let account = self.backend.basic_account(account_address)?.unwrap();
+        self.insert_account_info(account_address, account, insertion_type);
+
+        // The account is now in the database, so fetch and insert the storage value
+        let node_db_account = self.accounts.get_mut(&account_address).unwrap();
+        let slot_value = NodeDBSlot {
+            value,
+            insertion_type: InsertionType::Custom,
+        };
+        node_db_account.storage.insert(slot, slot_value);
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait NodeDBStorageAsync {
+    type Error;
+    async fn insert_account_storage(
+        &mut self,
+        account_address: Address,
+        slot: U256,
+        value: U256,
+        insertion_type: InsertionType,
+    ) -> Result<(), Self::Error>;
+}
+
+#[async_trait]
+impl<B: NodeDBBackendAsync> NodeDBStorageAsync for NodeDB<B>
+where
+    B: NodeDBBackendAsync,
+    B::Error: From<NodeDBError>,
+{
+    type Error = B::Error;
+
+    async fn insert_account_storage(
+        &mut self,
+        account_address: Address,
+        slot: U256,
+        value: U256,
+        insertion_type: InsertionType,
+    ) -> Result<(), Self::Error> {
         // If this account already exists, just update the storage slot
         if let Some(account) = self.accounts.get_mut(&account_address) {
             // slot value is marked as custom since this is a custom insertion
@@ -149,12 +234,11 @@ impl<B: NodeDBBackend> NodeDB<B> {
         Ok(())
     }
 }
-
 /// Implement the Database trait for NodeDB
 /// This allows us to use NodeDB as a database
 /// It is used internally by the NodeDB to fetch data from the chain
 /// Note: It is not used directly by the user
-impl<B: NodeDBBackend> DatabaseAsync for NodeDB<B>
+impl<B: NodeDBBackendAsync> DatabaseAsync for NodeDB<B>
 where
     B::Error: DBErrorMarker + From<NodeDBError>,
 {
@@ -260,14 +344,14 @@ where
     fn block_hash_async(
         &mut self,
         number: u64,
-    ) -> impl Future<Output = Result<B256, <B as NodeDBBackend>::Error>> + Send {
+    ) -> impl Future<Output = Result<B256, <B as NodeDBBackendAsync>::Error>> + Send {
         Self::block_hash_async_ref(self, number)
     }
 }
 
 impl<B> DatabaseAsync for &mut NodeDB<B>
 where
-    B: NodeDBBackend,
+    B: NodeDBBackendAsync,
     B::Error: DBErrorMarker + std::error::Error,
 {
     type Error = B::Error;
@@ -302,11 +386,59 @@ where
     }
 }
 
-/// Implement the DatabaseRef trait for NodeDB
+impl<B: NodeDBBackendSync> Database for NodeDB<B>
+where
+    B: NodeDBBackendSync,
+    B::Error: From<NodeDBError>,
+{
+    type Error = B::Error;
+
+    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.backend.basic_account(address)
+    }
+
+    fn code_by_hash(&mut self, _hash: B256) -> Result<Bytecode, Self::Error> {
+        Err(NodeDBError("This should not be called, as the code is already loaded".into()).into())
+    }
+
+    fn storage(&mut self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+        self.backend.storage(address, slot)
+    }
+
+    fn block_hash(&mut self, number: u64) -> Result<B256, Self::Error> {
+        self.backend.block_hash(number)
+    }
+}
+
+impl<B: NodeDBBackendSync> DatabaseRef for NodeDB<B>
+where
+    B: NodeDBBackendSync,
+    B::Error: From<NodeDBError>,
+{
+    type Error = B::Error;
+
+    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.backend.basic_account(address)
+    }
+
+    fn code_by_hash_ref(&self, _hash: B256) -> Result<Bytecode, Self::Error> {
+        Err(NodeDBError("This should not be called, as the code is already loaded".into()).into())
+    }
+
+    fn storage_ref(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+        self.backend.storage(address, slot)
+    }
+
+    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
+        self.backend.block_hash(number)
+    }
+}
+
+/// Implement the DatabaseAsyncRef trait for NodeDB
 /// This allows us to use NodeDB as a read-only database
 /// It is used internally by the NodeDB to fetch data from the chain
 /// Note: It is not used directly by the user
-impl<B: NodeDBBackend> DatabaseAsyncRef for NodeDB<B>
+impl<B: NodeDBBackendAsync> DatabaseAsyncRef for NodeDB<B>
 where
     B::Error: DBErrorMarker + From<NodeDBError>,
 {
@@ -382,7 +514,7 @@ where
     fn block_hash_async_ref(
         &self,
         number: u64,
-    ) -> impl Future<Output = Result<B256, <B as NodeDBBackend>::Error>> + Send {
+    ) -> impl Future<Output = Result<B256, <B as NodeDBBackendAsync>::Error>> + Send {
         async move {
             let hash = self.backend.block_hash(number).await?;
             Ok(hash)
@@ -392,7 +524,7 @@ where
 
 impl<B> DatabaseAsyncRef for &mut NodeDB<B>
 where
-    B: NodeDBBackend,
+    B: NodeDBBackendAsync,
     B::Error: DBErrorMarker + std::error::Error,
 {
     type Error = B::Error;
@@ -430,7 +562,7 @@ where
 /// Implement the DatabaseCommit trait for NodeDB
 /// It is used internally by the NodeDB to commit changes to the database
 /// Note: It is not used directly by the user
-impl<B: NodeDBBackend> DatabaseCommit for NodeDB<B> {
+impl<B: NodeDBBackendAsync> DatabaseCommit for NodeDB<B> {
     fn commit(&mut self, changes: HashMap<Address, Account, foldhash::fast::RandomState>) {
         for (address, mut account) in changes {
             if !account.is_touched() {
@@ -586,11 +718,11 @@ impl RethBackend {
     }
 }
 
-/// Implements the [`NodeDBBackend`] trait for the `RethBackend`.
+/// Implements the [`NodeDBBackendAsync`] trait for the `RethBackend`.
 /// This allows the `RethBackend` to be used as a backend for the `NodeDB`.
-/// The `NodeDBBackend` trait is used to abstract the database access layer.
+/// The `NodeDBBackendAsync` trait is used to abstract the database access layer.
 #[async_trait]
-impl NodeDBBackend for RethBackend {
+impl NodeDBBackendAsync for RethBackend {
     type Error = NodeDBError;
 
     /// Get basic account information.
@@ -648,6 +780,54 @@ impl NodeDBBackend for RethBackend {
         let provider = self.provider.read();
         let account_code = provider.account_code(&address)?;
         Ok(account_code.map(|code| Bytecode::new_raw(code.original_bytes())))
+    }
+}
+
+impl NodeDBBackendSync for RethBackend {
+    type Error = NodeDBError;
+
+    fn basic_account(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+
+        let prov = self.provider.read();
+        let acct_opt = prov.basic_account(&address)?;
+        let code_opt = prov.account_code(&address)?;
+
+        let acct_info = match acct_opt {
+            Some(acc) => {
+                let hash = code_opt.as_ref().map_or(KECCAK_EMPTY, |c| c.hash_slow());
+                let code = code_opt
+                    .map(|c| Bytecode::new_raw(c.original_bytes()))
+                    .unwrap_or_default();
+                AccountInfo::new(acc.balance, acc.nonce, hash, code)
+            }
+            None => return Ok(None),
+        };
+        Ok(Some(acct_info))
+    }
+
+    fn account_code(&self, address: Address) -> Result<Option<Bytecode>, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+        let prov = self.provider.read();
+        let code_opt = prov.account_code(&address)?;
+        Ok(code_opt.map(|c| Bytecode::new_raw(c.original_bytes())))
+    }
+
+    fn storage(&self, address: Address, slot: U256) -> Result<U256, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+        let prov = self.provider.read();
+        Ok(prov.storage(address, slot.into())?.unwrap_or(U256::ZERO))
+    }
+
+    fn block_hash(&self, number: u64) -> Result<B256, Self::Error> {
+        self.update_provider()
+            .map_err(|e| NodeDBError(e.to_string()))?;
+        let prov = self.provider.read();
+        let raw = prov.block_hash(number)?.unwrap_or(KECCAK_EMPTY);
+        Ok(B256::new(raw.0))
     }
 }
 

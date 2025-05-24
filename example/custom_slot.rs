@@ -5,6 +5,7 @@ use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
 use node_db::NodeDBAsync;
+use node_db::NodeDBStorageSync;
 use node_db::RethBackend;
 use node_db::{InsertionType, NodeDB};
 use revm::context::result::ExecutionResult;
@@ -33,14 +34,12 @@ async fn main() -> Result<()> {
 
     // give our account some weth
     let balance_slot = keccak256((account, U256::from(3)).abi_encode());
-    nodedb
-        .insert_account_storage(
-            weth,
-            balance_slot.into(),
-            U256::from(1e18),
-            InsertionType::OnChain, // weth has a corresponding onchain contract
-        )
-        .await?;
+    nodedb.insert_account_storage(
+        weth,
+        balance_slot.into(),
+        U256::from(1e18),
+        InsertionType::OnChain, // weth has a corresponding onchain contract
+    )?;
 
     // setup our balance_of calldata
     let balance_calldata = ERC20Token::balanceOfCall { account }.abi_encode();

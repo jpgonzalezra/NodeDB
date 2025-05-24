@@ -8,6 +8,10 @@ name = "swap"
 path = "example/swap.rs"
 
 [[bin]]
+name = "swap_async"
+path = "example/swap_async.rs"
+
+[[bin]]
 name = "quote"
 path = "example/quote.rs"
 
@@ -22,6 +26,10 @@ path = "example/custom_account.rs"
 [[bin]]
 name = "approval"
 path = "example/approval.rs"
+
+[[bin]]
+name = "approval_async"
+path = "example/approval_async.rs"
 
 [[bin]]
 name = "get_balance_slot"

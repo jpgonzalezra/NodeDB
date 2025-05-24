@@ -4,7 +4,7 @@ use alloy_primitives::{address, U256};
 use alloy_sol_types::{sol, SolCall, SolValue};
 use eyre::anyhow;
 use eyre::Result;
-use node_db::NodeDBAsync;
+use node_db::NodeDBStorageSync;
 use node_db::RethBackend;
 use node_db::{InsertionType, NodeDB};
 use revm::context::result::ExecutionResult;
@@ -49,14 +49,12 @@ async fn main() -> Result<()> {
 
     // give our account some weth
     let balance_slot = keccak256((account, U256::from(3)).abi_encode());
-    nodedb
-        .insert_account_storage(
-            weth,
-            balance_slot.into(),
-            U256::from(1e18),
-            InsertionType::OnChain, // weth has a corresponding onchain contract
-        )
-        .await?;
+    nodedb.insert_account_storage(
+        weth,
+        balance_slot.into(),
+        U256::from(1e18),
+        InsertionType::OnChain, // weth has a corresponding onchain contract
+    )?;
 
     // setup approval call and commit the transaction
     let approve_calldata = ERC20Token::approveCall {
@@ -64,11 +62,9 @@ async fn main() -> Result<()> {
         amount: U256::from(10e18),
     }
     .abi_encode();
-
-    let mut nodedb_async = NodeDBAsync::new(nodedb).unwrap();
     // construct a new evm instance
     let mut evm = Context::mainnet()
-        .with_db(&mut nodedb_async)
+        .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = account;
             tx.value = U256::ZERO;
@@ -93,7 +89,7 @@ async fn main() -> Result<()> {
 
     // set call to the router
     let mut evm = Context::mainnet()
-        .with_db(&mut nodedb_async)
+        .with_db(&mut nodedb)
         .modify_tx_chained(|tx| {
             tx.caller = account;
             tx.value = U256::ZERO;
