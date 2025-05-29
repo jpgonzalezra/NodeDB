@@ -125,6 +125,26 @@ impl<B> NodeDB<B> {
     }
 }
 
+#[async_trait]
+impl<T> NodeDBStorageAsync for NodeDBAsync<T>
+where
+    T: NodeDBStorageAsync + DatabaseAsyncRef + Send + Sync,
+{
+    type Error = <T as NodeDBStorageAsync>::Error;
+
+    async fn insert_account_storage(
+        &mut self,
+        account_address: Address,
+        slot: U256,
+        value: U256,
+        insertion_type: InsertionType,
+    ) -> Result<(), Self::Error> {
+        self.inner
+            .insert_account_storage(account_address, slot, value, insertion_type)
+            .await
+    }
+}
+
 pub trait NodeDBStorageSync {
     type Error;
     fn insert_account_storage(
